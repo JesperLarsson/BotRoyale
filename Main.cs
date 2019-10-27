@@ -12,6 +12,7 @@ using System.Collections.Generic;
 
 using static GameState;
 using static StaticConfig;
+using static BehaviourConfig;
 using static Log;
 
 /// <summary>
@@ -31,7 +32,7 @@ public class UnitHandler
 
                 if (siteIter.Type == StructureType.Barracks &&
                     siteIter.Owner == Owner.Friendly &&
-                    siteIter.Cooldown == 0)
+                    siteIter.CooldownOrHealth == 0)
                 {
                     siteToTrainAt = siteIter;
                     break;
@@ -52,19 +53,15 @@ public class UnitHandler
 }
 
 /// <summary>
-/// Handles building logic.
-/// 
-/// Current:
-/// 1. Find middle point, rush it
-/// 2. Build tower at point
-/// 3. Walk backwards and start building raxes
+/// Handles building logic and queen movement
 /// </summary>
 public static class QueenHandler
 {
-    private const int MaxActiveRax = 2;
+    // We build around this central tower for safety
+    private static Site CentralTower;
+    private static int CentralTowerUpgradesPerformed = 0;
 
-    private static Site TargetCentralSite;
-
+    // Sites by distance from the starting point, all points lower than the central index are considered "safe"
     private static Site[] SitesOrderedByInitialRange;
     private static int TargetCentralSiteIndex = -1;
 
@@ -86,54 +83,177 @@ public static class QueenHandler
     private static void MoveQueen()
     {
         // Move towards center tile
-        if (TargetCentralSite.Owner == Owner.None)
+        if (CentralTower.Owner == Owner.None)
         {
-            Debug("COMMAND - Moving to central tower at " + TargetCentralSite);
-            Command($"MOVE {TargetCentralSite.Location.x} {TargetCentralSite.Location.y}");
+            CentralTower.TargetType = StructureType.Tower;
+
+            Debug("COMMAND - Moving to central tower at " + CentralTower);
+            Command($"MOVE {CentralTower.Location.x} {CentralTower.Location.y}");
             return;
         }
 
         // Build rax if we want to
-        bool wantToBuildRax = CalculateNumberOfBarracksWeOwn() < MaxActiveRax;
-        if (wantToBuildRax)
+        var wantedRax = DetermineBarracksTypeOrNone();
+        if (wantedRax != UnitType.None)
         {
             Site targetSite = FindClosestUnclaimedSafeSite();
+            targetSite.TargetType = StructureType.Barracks;
+            targetSite.TargetRaxType = wantedRax;
+
             Debug("COMMAND - Moving to build rax at " + targetSite);
             Command($"MOVE {targetSite.Location.x} {targetSite.Location.y}");
             return;
         }
 
-        // Otherwise move to central tower for protection
-        if (QueenTouchedSiteOrNull == null || QueenTouchedSiteOrNull != TargetCentralSite)
+        // Find other tower location if it's safe and we have already upgraded our central tower
+        if (CentralTowerUpgradesPerformed < MaxTowerUpgrades)
         {
-            Debug("COMMAND - Falling back to central tower at " + TargetCentralSite);
-            Command($"MOVE {TargetCentralSite.Location.x} {TargetCentralSite.Location.y}");
+            // Move to tower if necessary
+            if (QueenTouchedSiteOrNull != CentralTower)
+            {
+                Debug("COMMAND - Falling back to central tower at " + CentralTower);
+                Command($"MOVE {CentralTower.Location.x} {CentralTower.Location.y}");
+                return;
+            }
+
+            // Start upgrading tower
+            Debug("COMMAND - Upgrading central tower at " + CentralTower);
+            Command($"BUILD {CentralTower.SiteId} TOWER");
+            CentralTowerUpgradesPerformed++;
             return;
         }
 
-        // Start upgrading tower
-        Debug("COMMAND - Upgrading central tower at " + TargetCentralSite);
-        Command($"BUILD {TargetCentralSite.SiteId} TOWER");
+        // Build additional support towers
+        Site additionalLocation = FindAdditionalSafeTowerLocationOrNull();
+        if (additionalLocation != null)
+        {
+            additionalLocation.TargetType = StructureType.Tower;
+            Debug("COMMAND - Moving to build additional support tower at " + additionalLocation);
+            Command($"MOVE {additionalLocation.Location.x} {additionalLocation.Location.y}");
+            return;
+        }
+
+        // Fallback strategy, we have nothing to do - Find safest spot and stay there
+        Point safestPoint = FindSafestSpotForQueen();
+        Debug("COMMAND - Moving to safespot at " + safestPoint);
+        Command($"MOVE {safestPoint.x} {safestPoint.y}");
         return;
+    }
+
+    private static Point FindSafestSpotForQueen()
+    {
+        return CentralTower.Location;
+    }
+
+    /// <summary>
+    /// Find a spot to build a tower that is within range of another tower
+    /// </summary>
+    private static Site FindAdditionalSafeTowerLocationOrNull()
+    {
+        // Check locations closer to our spawn first
+        for (int index = 0; index < SitesOrderedByInitialRange.Length && index < TargetCentralSiteIndex; index++)
+        {
+            Site iter = SitesOrderedByInitialRange[index];
+            if (iter.Owner != Owner.None)
+                continue;
+            if (iter.Type != StructureType.None)
+                continue;
+            if (IsInRangeOfEnemyTowers(iter.Location))
+                continue;
+
+            double distanceToCentralTower = CentralTower.Location.GetDistanceTo(iter.Location);
+            if (distanceToCentralTower <= CentralTower.RangeOrType)
+                return iter;
+        }
+
+        // Then any location
+        for (int index = 0; index < SitesOrderedByInitialRange.Length; index++)
+        {
+            Site iter = SitesOrderedByInitialRange[index];
+            if (iter.Owner != Owner.None)
+                continue;
+            if (iter.Type != StructureType.None)
+                continue;
+            if (IsInRangeOfEnemyTowers(iter.Location))
+                continue;
+
+            double distanceToCentralTower = CentralTower.Location.GetDistanceTo(iter.Location);
+            if (distanceToCentralTower <= CentralTower.RangeOrType)
+                return iter;
+        }
+
+        return null;
+    }
+
+    private static bool IsInRangeOfEnemyTowers(Point location)
+    {
+        foreach (var iter in Sites)
+        {
+            if (iter.Owner != Owner.Enemy)
+                continue;
+            if (iter.Type != StructureType.Tower)
+                continue;
+
+            double distance = iter.Location.GetDistanceTo(location);
+            if (distance <= iter.RangeOrType)
+                return true;
+        }
+
+        return false;
     }
 
     private static void ConstructBuilding()
     {
         int touchedId = QueenTouchedSiteOrNull.SiteId;
 
-        if (QueenTouchedSiteOrNull == TargetCentralSite)
+        if (QueenTouchedSiteOrNull.TargetType == StructureType.Tower)
         {
             Command($"BUILD {touchedId} TOWER");
         }
-        else
+        else if (QueenTouchedSiteOrNull.TargetType == StructureType.Barracks)
         {
             Command($"BUILD {touchedId} BARRACKS-KNIGHT");
+
+            var raxTypeRequested = QueenTouchedSiteOrNull.TargetRaxType;
+            if (raxTypeRequested == UnitType.Knight)
+            {
+                Command($"BUILD {touchedId} BARRACKS-KNIGHT");
+            }
+            else if (raxTypeRequested == UnitType.Giant)
+            {
+                Command($"BUILD {touchedId} BARRACKS-GIANT");
+            }
+            else
+            {
+                Command("SANITYCHECKFAILED");
+            }
+        }
+        else
+        {
+            // We just happend to touch something on the way somewhere
+            Debug($"COMMAND - Happened to touch site " + QueenTouchedSiteOrNull + " on the way");
+
+            var raxTypeRequested = DetermineBarracksTypeOrNone();
+            if (raxTypeRequested == UnitType.Knight)
+            {
+                Command($"BUILD {touchedId} BARRACKS-KNIGHT");
+            }
+            else if (raxTypeRequested == UnitType.Giant)
+            {
+                Command($"BUILD {touchedId} BARRACKS-GIANT");
+            }
+            else
+            {
+                Command($"BUILD {touchedId} TOWER");
+            }
         }
     }
 
-    private static int CalculateNumberOfBarracksWeOwn()
+    private static UnitType DetermineBarracksTypeOrNone()
     {
-        int count = 0;
+        // Get number of current rax of each type
+        int knightCount = 0;
+        int giantCount = 0;
         foreach (var site in Sites)
         {
             if (site.Owner != Owner.Friendly)
@@ -141,10 +261,20 @@ public static class QueenHandler
             if (site.Type != StructureType.Barracks)
                 continue;
 
-            count++;
+            var raxType = ((UnitType)site.RangeOrType);
+            if (raxType == UnitType.Knight)
+                knightCount++;
+            if (raxType == UnitType.Giant)
+                giantCount++;
         }
 
-        return count;
+        if (giantCount < MaxActiveGiantRax)
+            return UnitType.Giant;
+        if (knightCount < MaxActiveKnightRax)
+            return UnitType.Knight;
+
+        // We don't want a rax
+        return UnitType.None;
     }
 
     //public static Site FindClosestUnclaimedSite()
@@ -213,7 +343,7 @@ public static class QueenHandler
             if (ourDistanceToSite > maxDistance)
             {
                 maxDistance = ourDistanceToSite;
-                TargetCentralSite = siteIter;
+                CentralTower = siteIter;
             }
         }
 
@@ -224,14 +354,14 @@ public static class QueenHandler
         // Find central site in sorted data
         for (int index = 0; index < SitesOrderedByInitialRange.Length; index++)
         {
-            if (SitesOrderedByInitialRange[index] == TargetCentralSite)
+            if (SitesOrderedByInitialRange[index] == CentralTower)
             {
                 TargetCentralSiteIndex = index;
                 break;
             }
         }
 
-        Debug("Found target center site: " + TargetCentralSite);
+        Debug("Found target center site: " + CentralTower);
     }
 }
 
@@ -293,17 +423,17 @@ public class MainLoop
         {
             ReadBuffer = Console.ReadLine().Split(' ');
             int siteId = int.Parse(ReadBuffer[0]);
-            int structureType = int.Parse(ReadBuffer[3]); // -1 = No structure, 2 = Barracks
-            int owner = int.Parse(ReadBuffer[4]); // -1 = No structure, 0 = Friendly, 1 = Enemy
+            int structureType = int.Parse(ReadBuffer[3]);
+            int owner = int.Parse(ReadBuffer[4]); ;
 
             // Guessed from input data
-            int cd = int.Parse(ReadBuffer[5]);
-            int range = int.Parse(ReadBuffer[6]);
+            int param1 = int.Parse(ReadBuffer[5]);
+            int param2 = int.Parse(ReadBuffer[6]);
 
             Sites[siteId].Type = (StructureType)structureType;
-            Sites[siteId].Cooldown = cd;
+            Sites[siteId].CooldownOrHealth = param1; // cd for rax, health for towers
             Sites[siteId].Owner = (Owner)owner;
-            Sites[siteId].Range = range;
+            Sites[siteId].RangeOrType = param2; // range for towers, unit type for rax
         }
 
         // Read - Unit states
@@ -359,9 +489,18 @@ public class MainLoop
 
 public static class StaticConfig
 {
-    public const int BoardWidth = 1920;
-    public const int BoardHeight = 1000;
     public const int KnightCost = 80;
+    public const int GiantCost = 140;
+}
+
+/// <summary>
+/// Bot behaviour settings
+/// </summary>
+public static class BehaviourConfig
+{
+    public const int MaxActiveGiantRax = 1;
+    public const int MaxActiveKnightRax = 1;
+    public const int MaxTowerUpgrades = 7;
 }
 
 public static class GameState
@@ -399,15 +538,19 @@ public static class Log
 
 public enum UnitType
 {
+    None = -99,
+
     Queen = -1,
     Knight = 0,
-    Archer = 1
+    Archer = 1,
+    Giant = 2,
 }
 
 public enum StructureType
 {
     None = -1,
-    Barracks = 2
+    Tower = 1,
+    Barracks = 2,
 }
 
 public enum Owner
@@ -424,13 +567,18 @@ public class Site
 {
     public int SiteId;
     public int CollisionRadius;
-    public int Range;
+    public int RangeOrType;
     public Point Location;
+
+    // Current type and planned type
     public StructureType Type = StructureType.None;
+    public StructureType TargetType = StructureType.None;
+    public UnitType TargetRaxType = UnitType.None;
+
     public Owner Owner = Owner.None;
 
     // -1 = cannot build, 0 = can build, positive integer = cooldown left
-    public int Cooldown;
+    public int CooldownOrHealth;
 
     public double DistanceFromInitialStart = double.MinValue;
 
