@@ -1,23 +1,7 @@
 
-Cost för giants / archers
 
-
-
-Archers omm fiende bygger knight barrack
-Giants omm fiende bygger fler än 1-2 torn
-Annars pumps knights
-
-
-När inget bättre att göra kan man gå runt och uppgradera / refresha torn
 
 Förbättringar:
 - Drottningen kan fastna på saker om det råkar vara en site bara mitt i vägen till centrum eller så
 - Safe space checken fungerar inte helt, den verkar bara ta överlap mellan center circle och en annan
 
-
-Små förbättringar:
-- Bygg i barracken som är närmast fiende
-
-
-Svåra förbättringar:
-- Bygg i våger

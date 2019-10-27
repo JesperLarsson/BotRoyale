@@ -9,22 +9,25 @@ using System.IO;
 using System.Text;
 using System.Collections;
 using System.Collections.Generic;
+using System.Drawing;
 
 using static GameState;
 using static StaticConfig;
 using static BotBehaviour;
 using static Log;
-using System.Drawing;
+using static UtilityFunctions;
 
 /// <summary>
 /// Handles unit logic
 /// </summary>
 public class UnitHandler
 {
-    public static UnitStrategy CurrentStrategy = UnitStrategy.MakeKnights;
+    public static UnitStrategy CurrentStrategy = UnitStrategy.MakeArchers;
     private const int TowerSpamDetectionThreshold = 2;
-    private const int UnitSpamDetectionThreshold = 5; // Ex 4 knights + 1 queen
-    private const int QueenRushdownThreshold = 10;
+    private const int UnitSpamDetectionThreshold = 3; // Larger than this => build archers
+    private const int QueenRushdownThreshold = 10; // Less than or equal => rush their queen
+    private const int RenewArchersUnderHealth = 5;
+    private const int RenewGiantsUnderHealth = 10;
 
     public static void SetUnitStrategy()
     {
@@ -32,13 +35,14 @@ public class UnitHandler
         if (EnemyQueenRef.Health <= QueenRushdownThreshold)
         {
             // Rush with knights
+            Debug("Enemy queen is low, rushing with knights");
             CurrentStrategy = UnitStrategy.MakeKnights;
             return;
         }
 
         // Is enemy spamming units?
         int unitCount = GetUnitCount(Owner.Enemy, null);
-        if (unitCount > UnitSpamDetectionThreshold && GetUnitCount(Owner.Friendly, UnitType.Archer) < MaxArcherUnitCount)
+        if (unitCount > UnitSpamDetectionThreshold && GetUnitCount(Owner.Friendly, UnitType.Archer, RenewArchersUnderHealth) < MaxArcherUnitCount)
         {
             CurrentStrategy = UnitStrategy.MakeArchers;
             return;
@@ -46,7 +50,7 @@ public class UnitHandler
 
         // Is enemy spamming towers?
         int towerCount = GetEnemyTowerCount();
-        if (towerCount > TowerSpamDetectionThreshold && GetUnitCount(Owner.Friendly, UnitType.Archer) < MaxGiantUnitCount)
+        if (towerCount > TowerSpamDetectionThreshold && GetUnitCount(Owner.Friendly, UnitType.Giant, RenewGiantsUnderHealth) < MaxGiantUnitCount)
         {
             CurrentStrategy = UnitStrategy.MakeGiants;
             return;
@@ -68,36 +72,21 @@ public class UnitHandler
         // Order a rax to be built if unavailble
         if (CurrentStrategy == UnitStrategy.MakeKnights)
         {
-            BotBehaviour.MaxKnightsRax += 1;
+            BotBehaviour.MaxKnightsRax += AllowdAdditionalKnightsRax;
         }
         else if (CurrentStrategy == UnitStrategy.MakeArchers)
         {
-            BotBehaviour.MaxArcherRax += 1;
+            BotBehaviour.MaxArcherRax += AllowdAdditionalArcherRax;
         }
         else if (CurrentStrategy == UnitStrategy.MakeGiants)
         {
-            BotBehaviour.MaxGiantRax += 1;
+            BotBehaviour.MaxGiantRax += AllowdAdditionalGiantRax;
         }
         else
         {
             Debug("WARNING - Unknown strategy set");
             SanityCheckFailed();
         }
-    }
-
-    private static int GetUnitCount(Owner? targetOwner, UnitType? type)
-    {
-        int count = 0;
-        foreach (var iter in Units)
-        {
-            if (targetOwner.HasValue && iter.Owner != targetOwner)
-                continue;
-            if (type.HasValue && iter.Type != type)
-                continue;
-
-            count++;
-        }
-        return count;
     }
 
     private static int GetEnemyTowerCount()
@@ -193,7 +182,6 @@ public class UnitHandler
 
         return null;
     }
-
 }
 
 /// <summary>
@@ -218,10 +206,22 @@ public static class QueenHandler
         {
             ConstructBuilding();
         }
+        else if (QueenTouchedSiteOrNull != null && QueenTouchedSiteOrNull.Owner == Owner.Friendly && 
+            QueenTouchedSiteOrNull.Type == StructureType.Tower && QueenTouchedSiteOrNull.TargetType == StructureType.Tower && 
+            QueenTouchedSiteOrNull.CooldownOrHealth <= UpgradeThresholdHealth)
+        {
+            UpgradeTower();
+        }
         else
         {
             MoveQueen();
         }
+    }
+
+    private static void UpgradeTower()
+    {
+        Debug("COMMAND - Upgrading touched tower");
+        Command($"BUILD {QueenTouchedSiteOrNull.SiteId} TOWER");
     }
 
     private static void MoveQueen()
@@ -250,7 +250,7 @@ public static class QueenHandler
         }
 
         // Find other tower location if it's safe and we have already upgraded our central tower
-        if (CentralTowerUpgradesPerformed < MaxTowerUpgrades)
+        if (CentralTowerUpgradesPerformed < CentralTowerTargetUpgrades)
         {
             // Move to tower if necessary
             if (QueenTouchedSiteOrNull != CentralTower)
@@ -277,57 +277,134 @@ public static class QueenHandler
             return;
         }
 
+        // Kite enemy knights if necessary
+        Point? kiteLocation = DoWeNeedToKiteEnemyUnits();
+        if (kiteLocation.HasValue)
+        {
+            Debug("COMMAND - Kiting enemy knights towards " + kiteLocation.Value);
+            Command($"MOVE {kiteLocation.Value.X} {kiteLocation.Value.Y}");
+            return;
+        }
+
+        // Does a tower need ugprading / repair?
+        Site towerToUpgrade = FindSafeTowerThatNeedsUpgrading();
+        if (towerToUpgrade != null)
+        {
+            Debug("COMMAND - Moving to upgrade tower " + towerToUpgrade);
+            Command($"MOVE {towerToUpgrade.Location.x} {towerToUpgrade.Location.y}");
+            return;
+        }
+
         // Fallback strategy, we have nothing to do - Find safest spot and stay there
-        Point safestPoint = FindSafestSpotForQueen();
+        Point safestPoint = FindGeneralSafeSpotForQueen();
         Debug("COMMAND - Moving to safespot at " + safestPoint);
         Command($"MOVE {safestPoint.X} {safestPoint.Y}");
         return;
     }
 
-    private static Point FindSafestSpotForQueen()
+    private static Site FindSafeTowerThatNeedsUpgrading()
     {
-        // Find a point where we're inside more than central tower circle
-        var candidatePoints = new List<Point>();
-        foreach (var iter in Sites)
+        // Then any location
+        for (int index = 0; index < SitesOrderedByInitialRange.Length; index++)
         {
-            if (iter.Owner != Owner.Friendly)
+            Site iter = SitesOrderedByInitialRange[index];
+            if (iter.Owner != Owner.None)
                 continue;
-            if (iter.Type != StructureType.Tower)
+            if (iter.Type != StructureType.None)
                 continue;
-
-            int intersectionCount = FindCircleCircleIntersections(
-                iter.Location.x,
-                iter.Location.y,
-                iter.RangeOrType,
-                CentralTower.Location.x,
-                CentralTower.Location.y,
-                CentralTower.RangeOrType,
-                out Point point1,
-                out Point point2
-                );
-
-            if (intersectionCount == 0)
+            if (IsInRangeOfEnemyTowers(iter.Location))
                 continue;
 
-            candidatePoints.Add(point1);
+            double distanceToCentralTower = CentralTower.Location.GetDistanceTo(iter.Location);
+            if (distanceToCentralTower > CentralTower.RangeOrType)
+                continue;
+
+            if (iter.CooldownOrHealth < UpgradeThresholdHealth)
+                return iter;
         }
 
-        if (candidatePoints.Count == 0)
-            return new Point(CentralTower.Location.x, CentralTower.Location.y);
+        return null;
+    }
 
-        // Check if multiple overlaps are possible
-        int maxCount = -1;
-        Point maxPoint = new Point();
-        foreach (Point iter in candidatePoints)
+    /// <summary>
+    /// Null = do not need to kite
+    /// Otherwise a point towards which to move
+    /// </summary>
+    private static Point? DoWeNeedToKiteEnemyUnits()
+    {
+        // More than this and we starting kiting
+        const int KiteCountThreshold = 2;
+        // Knight must be within this range
+        const int KiteDistanceThreshold = 500;
+
+        // Get number of knights which are close to us
+        int count = 0;
+        foreach (var iter in Units)
         {
-            int overlapCount = GetTowerOverlapCountForPoint(iter);
-            if (overlapCount > maxCount)
-            {
-                maxCount = overlapCount;
-                maxPoint = iter;
-            }
+            if (iter.Owner != Owner.Enemy)
+                continue;
+            if (iter.Type != UnitType.Knight)
+                continue;
+
+            double distance = iter.Location.GetDistanceTo(QueenRef.Location);
+            if (distance <= KiteDistanceThreshold)
+                count++;
         }
-        return maxPoint;
+
+        if (count < KiteCountThreshold)
+            return null;
+
+        // Start kiting
+        return new Point(QueenStartedAt.x, QueenStartedAt.y);
+    }
+
+    private static Point FindGeneralSafeSpotForQueen()
+    {
+        return new Point(CentralTower.Location.x, CentralTower.Location.y);
+
+        // Does not work properly:
+        //// Find a point where we're inside more than central tower circle
+        //var candidatePoints = new List<Point>();
+        //foreach (var iter in Sites)
+        //{
+        //    if (iter.Owner != Owner.Friendly)
+        //        continue;
+        //    if (iter.Type != StructureType.Tower)
+        //        continue;
+
+        //    int intersectionCount = FindCircleCircleIntersections(
+        //        iter.Location.x,
+        //        iter.Location.y,
+        //        iter.RangeOrType,
+        //        CentralTower.Location.x,
+        //        CentralTower.Location.y,
+        //        CentralTower.RangeOrType,
+        //        out Point point1,
+        //        out Point point2
+        //        );
+
+        //    if (intersectionCount == 0)
+        //        continue;
+
+        //    candidatePoints.Add(point1);
+        //}
+
+        //if (candidatePoints.Count == 0)
+        //    return new Point(CentralTower.Location.x, CentralTower.Location.y);
+
+        //// Check if multiple overlaps are possible
+        //int maxCount = -1;
+        //Point maxPoint = new Point();
+        //foreach (Point iter in candidatePoints)
+        //{
+        //    int overlapCount = GetTowerOverlapCountForPoint(iter);
+        //    if (overlapCount > maxCount)
+        //    {
+        //        maxCount = overlapCount;
+        //        maxPoint = iter;
+        //    }
+        //}
+        //return maxPoint;
     }
 
     /// <summary>
@@ -736,7 +813,8 @@ public class MainLoop
         // Debug info
         if (IsFirstTurn)
         {
-            Debug("Our queen starts at " + QueenRef.Location);
+            QueenStartedAt = QueenRef.Location;
+            Debug("Our queen starts at " + QueenStartedAt);
             Debug("Enemy queen starts at " + EnemyQueenRef.Location);
         }
     }
@@ -754,20 +832,26 @@ public static class StaticConfig
 /// </summary>
 public static class BotBehaviour
 {
+    public const int UpgradeThresholdHealth = 400;
+
     public const int MaxGiantUnitCount = 1;
     public const int MaxArcherUnitCount = 4;
     //public const int MaxKnightUnitCount = int.MaxValue;
 
     public const int InitialMaxGiantRax = 0;
     public const int InitialMaxKnightsRax = 1;
-    public const int InitialMaxArcherRax = 0;
+    public const int InitialMaxArcherRax = 1;
+
+    public const int AllowdAdditionalGiantRax = 1;
+    public const int AllowdAdditionalKnightsRax = 0;
+    public const int AllowdAdditionalArcherRax = 0;
 
     public static int MaxGiantRax = InitialMaxGiantRax;
     public static int MaxKnightsRax = InitialMaxKnightsRax;
     public static int MaxArcherRax = InitialMaxArcherRax;
 
     // Towers cannot be upgraded past this point
-    public const int MaxTowerUpgrades = 7;
+    public const int CentralTowerTargetUpgrades = 5; // max = 7
 }
 
 public static class GameState
@@ -782,6 +866,7 @@ public static class GameState
 
     // Queen
     public static Unit QueenRef;
+    public static MapCoordinate QueenStartedAt;
     public static Unit EnemyQueenRef;
     public static Site QueenTouchedSiteOrNull = null;
 
@@ -911,5 +996,26 @@ public class Unit
     {
         string type = Enum.GetName(typeof(UnitType), this.Type);
         return $"[Unit {type}-{Location.ToString()}";
+    }
+}
+
+public static class UtilityFunctions
+{
+    public static int GetUnitCount(Owner? targetOwner, UnitType? type, int? ignoreUnitsUnderHealthThreshold = null)
+    {
+        int count = 0;
+        foreach (var iter in Units)
+        {
+            if (targetOwner.HasValue && iter.Owner != targetOwner)
+                continue;
+            if (type.HasValue && iter.Type != type)
+                continue;
+            if (ignoreUnitsUnderHealthThreshold.HasValue && iter.Health < ignoreUnitsUnderHealthThreshold.Value)
+                continue;
+
+
+            count++;
+        }
+        return count;
     }
 }
