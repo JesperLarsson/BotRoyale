@@ -243,7 +243,7 @@ public static class QueenHandler
             MoveQueen();
         }
     }
-
+    
     private static void MoveQueen()
     {
         // High priority - Build archer rax if necessary, we need it to defend early rushes
@@ -259,13 +259,22 @@ public static class QueenHandler
             return;
         }
 
-        // Move towards planned center tower
+        // Build central tower
         if (CentralTower.Owner == Owner.None)
         {
             CentralTower.TargetType = StructureType.Tower;
 
             Debug("COMMAND - Moving to central tower at " + CentralTower);
             Command($"MOVE {CentralTower.Location.x} {CentralTower.Location.y}");
+            return;
+        }
+
+        // Kite enemy knights if necessary
+        Point? kiteLocation = DoWeNeedToKiteEnemyUnits();
+        if (kiteLocation.HasValue)
+        {
+            Debug("COMMAND - Kiting enemy knights towards " + kiteLocation.Value);
+            Command($"MOVE {kiteLocation.Value.X} {kiteLocation.Value.Y}");
             return;
         }
 
@@ -289,6 +298,15 @@ public static class QueenHandler
             }
         }
 
+        // If we can move to a site within a single game tick, we take it because it's cheap
+        Site closeSite = GetSuperCloseSiteIfAny();
+        if (closeSite != null)
+        {
+            Debug("COMMAND - Moving to site because we happen to be close " + closeSite);
+            Command($"MOVE {closeSite.Location.x} {closeSite.Location.y}");
+            return;
+        }
+
         // Build rax if we want to
         if (wantedRax != UnitType.None)
         {
@@ -300,16 +318,7 @@ public static class QueenHandler
             Command($"MOVE {targetSite.Location.x} {targetSite.Location.y}");
             return;
         }
-
-        // Kite enemy knights if necessary
-        Point? kiteLocation = DoWeNeedToKiteEnemyUnits();
-        if (kiteLocation.HasValue)
-        {
-            Debug("COMMAND - Kiting enemy knights towards " + kiteLocation.Value);
-            Command($"MOVE {kiteLocation.Value.X} {kiteLocation.Value.Y}");
-            return;
-        }
-
+        
         // Build extra mines
         if (activeMines < OptimalMineCount)
         {
@@ -386,6 +395,21 @@ public static class QueenHandler
         Debug("COMMAND - Moving to safespot at " + safestPoint);
         Command($"MOVE {safestPoint.X} {safestPoint.Y}");
         return;
+    }
+
+    private static Site GetSuperCloseSiteIfAny()
+    {
+        foreach (var iter in Sites)
+        {
+            if (iter.Owner != Owner.None)
+                continue;
+
+            double distance = iter.Location.GetDistanceTo(QueenRef.Location);
+            if (distance < QueenMoveSpeed)
+                return iter;
+        }
+
+        return null;
     }
 
     private static Site FindTertiaryMineLocation()
@@ -547,27 +571,83 @@ public static class QueenHandler
         // More than this and we starting kiting
         const int KiteCountThreshold = 2;
         // Knight must be within this range
-        const int KiteDistanceThreshold = 500;
+        const int KiteDistanceThreshold = 350;
+        const int DiscountUnitsBelowHealth = 5;
 
         // Get number of knights which are close to us
         int count = 0;
+        int enemyXTotal = 0;
+        int enemyYTotal = 0;
         foreach (var iter in Units)
         {
             if (iter.Owner != Owner.Enemy)
                 continue;
             if (iter.Type != UnitType.Knight)
                 continue;
+            if (iter.Health < DiscountUnitsBelowHealth)
+                continue;
 
             double distance = iter.Location.GetDistanceTo(QueenRef.Location);
             if (distance <= KiteDistanceThreshold)
+            {
+                enemyXTotal += iter.Location.x;
+                enemyYTotal += iter.Location.y;
                 count++;
+            }
         }
 
         if (count < KiteCountThreshold)
-            return null;
+            return null;  // We do not need to kite
+
+        // Calculate where to kite to - Avoid enemy group while staying in tower range
+        Point enemyGroupLocatedAt = new Point(enemyXTotal / count, enemyYTotal / count);
 
         // Start kiting
-        return new Point(QueenStartedAt.x, QueenStartedAt.y);
+        return CalculateKiteCoordinates(enemyGroupLocatedAt);
+    }
+
+    private static Point? CalculateKiteCoordinates(Point enemyGroupLocatedAt)
+    {
+        // Find the closest tower
+        Site pivotTower = null;
+        double minDistance = double.MaxValue;
+        foreach (var iter in Sites)
+        {
+            if (iter.Owner != Owner.Friendly)
+                continue;
+            if (iter.Type != StructureType.Tower)
+                continue;
+
+            double distance = QueenRef.Location.GetDistanceTo(iter.Location);
+            if (distance < minDistance)
+            {
+                minDistance = distance;
+                pivotTower = iter;
+            }
+        }
+
+        // We have no tower - Kite towards spawn
+        if (pivotTower == null)
+            new Point(QueenStartedAt.x, QueenStartedAt.y);
+
+        // Kite to other side of the tower
+        int xDiff = enemyGroupLocatedAt.X - pivotTower.Location.x;
+        int yDiff = enemyGroupLocatedAt.Y - pivotTower.Location.y;
+
+        int x = pivotTower.Location.x - xDiff;
+        int y = pivotTower.Location.y - yDiff;
+
+        // Sanity check boundries
+        if (x < 0)
+            x = 0;
+        if (x > BoardWidth)
+            x = BoardWidth;
+        if (y < 0)
+            y = 0;
+        if (y > BoardHeight)
+            y = BoardHeight;
+
+        return new Point(x, y);
     }
 
     private static Point FindGeneralSafeSpotForQueen()
@@ -1112,6 +1192,11 @@ public class MainLoop
 
 public static class StaticConfig
 {
+    public const int BoardWidth = 1920;
+    public const int BoardHeight = 1000;
+
+    public const int QueenMoveSpeed = 60; // units per tick
+
     public const int KnightCost = 80;
     public const int ArcherCost = 100;
     public const int GiantCost = 140;
@@ -1286,6 +1371,10 @@ public class MapCoordinate
     public double GetDistanceTo(MapCoordinate other)
     {
         return Math.Sqrt(Math.Pow((other.x - this.x), 2) + Math.Pow((other.y - this.y), 2));
+    }
+    public double GetDistanceTo(Point other)
+    {
+        return Math.Sqrt(Math.Pow((other.X - this.x), 2) + Math.Pow((other.Y - this.y), 2));
     }
 
     public override string ToString()
