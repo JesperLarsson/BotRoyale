@@ -14,6 +14,7 @@ using static GameState;
 using static StaticConfig;
 using static BehaviourConfig;
 using static Log;
+using System.Drawing;
 
 /// <summary>
 /// Handles unit logic
@@ -136,13 +137,54 @@ public static class QueenHandler
         // Fallback strategy, we have nothing to do - Find safest spot and stay there
         Point safestPoint = FindSafestSpotForQueen();
         Debug("COMMAND - Moving to safespot at " + safestPoint);
-        Command($"MOVE {safestPoint.x} {safestPoint.y}");
+        Command($"MOVE {safestPoint.X} {safestPoint.Y}");
         return;
     }
 
     private static Point FindSafestSpotForQueen()
     {
-        return CentralTower.Location;
+        // Find a point where we're inside more than central tower circle
+        var candidatePoints = new List<Point>();
+        foreach (var iter in Sites)
+        {
+            if (iter.Owner != Owner.Friendly)
+                continue;
+            if (iter.Type != StructureType.Tower)
+                continue;
+
+            int intersectionCount = FindCircleCircleIntersections(
+                iter.Location.x,
+                iter.Location.y,
+                iter.RangeOrType,
+                CentralTower.Location.x,
+                CentralTower.Location.y,
+                CentralTower.RangeOrType,
+                out Point point1,
+                out Point point2
+                );
+
+            if (intersectionCount == 0)
+                continue;
+
+            candidatePoints.Add(point1);
+        }
+
+        if (candidatePoints.Count == 0)
+            return new Point(CentralTower.Location.x, CentralTower.Location.y);
+
+        // Check if multiple overlaps are possible
+        int maxCount = -1;
+        Point maxPoint = new Point();
+        foreach (Point iter in candidatePoints)
+        {
+            int overlapCount = GetTowerOverlapCountForPoint(iter);
+            if (overlapCount > maxCount)
+            {
+                maxCount = overlapCount;
+                maxPoint = iter;
+            }
+        }
+        return maxPoint;
     }
 
     /// <summary>
@@ -185,7 +227,7 @@ public static class QueenHandler
         return null;
     }
 
-    private static bool IsInRangeOfEnemyTowers(Point location)
+    private static bool IsInRangeOfEnemyTowers(MapCoordinate location)
     {
         foreach (var iter in Sites)
         {
@@ -212,7 +254,7 @@ public static class QueenHandler
         }
         else if (QueenTouchedSiteOrNull.TargetType == StructureType.Barracks)
         {
-            Command($"BUILD {touchedId} BARRACKS-KNIGHT");
+            Debug("COMMAND - Building target building");
 
             var raxTypeRequested = QueenTouchedSiteOrNull.TargetRaxType;
             if (raxTypeRequested == UnitType.Knight)
@@ -268,34 +310,14 @@ public static class QueenHandler
                 giantCount++;
         }
 
-        if (giantCount < MaxActiveGiantRax)
+        if (giantCount < StartingMaxGiantRax)
             return UnitType.Giant;
-        if (knightCount < MaxActiveKnightRax)
+        if (knightCount < StartingMaxKnightsRax)
             return UnitType.Knight;
 
         // We don't want a rax
         return UnitType.None;
     }
-
-    //public static Site FindClosestUnclaimedSite()
-    //{
-    //    double minDistance = double.MaxValue;
-    //    Site minSite = null;
-    //    foreach (var iter in Sites)
-    //    {
-    //        if (iter.Owner != Owner.None)
-    //            continue;
-
-    //        double distance = iter.Location.GetDistanceTo(QueenRef.Location);
-    //        if (distance < minDistance)
-    //        {
-    //            minDistance = distance;
-    //            minSite = iter;
-    //        }
-    //    }
-
-    //    return minSite;
-    //}
 
     public static Site FindClosestUnclaimedSafeSite()
     {
@@ -363,6 +385,86 @@ public static class QueenHandler
 
         Debug("Found target center site: " + CentralTower);
     }
+
+    private static int GetTowerOverlapCountForPoint(PointF point)
+    {
+        int count = 0;
+
+        foreach (var iter in Sites)
+        {
+            if (iter.Owner != Owner.Friendly)
+                continue;
+            if (iter.Type != StructureType.Tower)
+                continue;
+
+            var temp = new MapCoordinate((int)point.X, (int)point.Y);
+            var distance = temp.GetDistanceTo(iter.Location);
+            if (distance <= iter.RangeOrType)
+                count++;
+        }
+
+        return count;
+    }
+
+    private static int FindCircleCircleIntersections(
+        float cx0, float cy0, float radius0,
+        float cx1, float cy1, float radius1,
+        out Point intersection1, out Point intersection2)
+    {
+        // Taken from https://forum.unity.com/threads/calulate-the-intersection-points-of-two-circles.611032/
+
+        // Find the distance between the centers.
+        float dx = cx0 - cx1;
+        float dy = cy0 - cy1;
+        double dist = Math.Sqrt(dx * dx + dy * dy);
+
+        // See how many solutions there are.
+        if (dist > radius0 + radius1)
+        {
+            // No solutions, the circles are too far apart.
+            intersection1 = new Point(0, 0);
+            intersection2 = new Point(0, 0);
+            return 0;
+        }
+        else if (dist < Math.Abs(radius0 - radius1))
+        {
+            // No solutions, one circle contains the other.
+            intersection1 = new Point(0, 0);
+            intersection2 = new Point(0, 0);
+            return 0;
+        }
+        else if ((dist == 0) && (radius0 == radius1))
+        {
+            // No solutions, the circles coincide.
+            intersection1 = new Point(0, 0);
+            intersection2 = new Point(0, 0);
+            return 0;
+        }
+        else
+        {
+            // Find a and h.
+            double a = (radius0 * radius0 -
+                radius1 * radius1 + dist * dist) / (2 * dist);
+            double h = Math.Sqrt(radius0 * radius0 - a * a);
+
+            // Find P2.
+            double cx2 = cx0 + a * (cx1 - cx0) / dist;
+            double cy2 = cy0 + a * (cy1 - cy0) / dist;
+
+            // Get the points P3.
+            intersection1 = new Point(
+                (int)(cx2 + h * (cy1 - cy0) / dist),
+                (int)(cy2 - h * (cx1 - cx0) / dist));
+            intersection2 = new Point(
+                (int)(cx2 - h * (cy1 - cy0) / dist),
+                (int)(cy2 + h * (cx1 - cx0) / dist));
+
+            // See if we have 1 or 2 solutions.
+            if (dist == radius0 + radius1) return 1;
+            return 2;
+        }
+    }
+
 }
 
 /// <summary>
@@ -407,7 +509,7 @@ public class MainLoop
             int y = int.Parse(ReadBuffer[2]);
             int radius = int.Parse(ReadBuffer[3]);
 
-            GameState.Sites[i] = new Site(siteId, radius, new Point(x, y));
+            GameState.Sites[i] = new Site(siteId, radius, new MapCoordinate(x, y));
         }
     }
 
@@ -450,7 +552,7 @@ public class MainLoop
             Units[i] = new Unit();
             Units[i].Owner = (Owner)owner;
             Units[i].Type = (UnitType)unitType;
-            Units[i].Location = new Point(x, y);
+            Units[i].Location = new MapCoordinate(x, y);
 
             // Update queen position
             if (unitType == (int)UnitType.Queen)
@@ -498,9 +600,11 @@ public static class StaticConfig
 /// </summary>
 public static class BehaviourConfig
 {
-    public const int MaxActiveGiantRax = 1;
-    public const int MaxActiveKnightRax = 1;
+    public const int StartingMaxGiantRax = 0;
+    public const int StartingMaxKnightsRax = 1;
     public const int MaxTowerUpgrades = 7;
+
+
 }
 
 public static class GameState
@@ -568,7 +672,7 @@ public class Site
     public int SiteId;
     public int CollisionRadius;
     public int RangeOrType;
-    public Point Location;
+    public MapCoordinate Location;
 
     // Current type and planned type
     public StructureType Type = StructureType.None;
@@ -582,7 +686,7 @@ public class Site
 
     public double DistanceFromInitialStart = double.MinValue;
 
-    public Site(int siteId, int radius, Point location)
+    public Site(int siteId, int radius, MapCoordinate location)
     {
         SiteId = siteId;
         CollisionRadius = radius;
@@ -598,18 +702,18 @@ public class Site
 /// <summary>
 /// Coordinate on map
 /// </summary>
-public class Point
+public class MapCoordinate
 {
     public int x;
     public int y;
 
-    public Point(int x, int y)
+    public MapCoordinate(int x, int y)
     {
         this.x = x;
         this.y = y;
     }
 
-    public double GetDistanceTo(Point other)
+    public double GetDistanceTo(MapCoordinate other)
     {
         return Math.Sqrt(Math.Pow((other.x - this.x), 2) + Math.Pow((other.y - this.y), 2));
     }
@@ -622,7 +726,7 @@ public class Point
 
 public class Unit
 {
-    public Point Location;
+    public MapCoordinate Location;
     public UnitType Type;
     public Owner Owner = Owner.None;
 
