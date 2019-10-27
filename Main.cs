@@ -16,13 +16,6 @@ using static BotBehaviour;
 using static Log;
 using System.Drawing;
 
-public enum UnitStrategy
-{
-    MakeKnights = 0,
-    MakeArchers = 1,
-    MakeGiants = 2
-}
-
 /// <summary>
 /// Handles unit logic
 /// </summary>
@@ -30,10 +23,19 @@ public class UnitHandler
 {
     public static UnitStrategy CurrentStrategy = UnitStrategy.MakeKnights;
     private const int TowerSpamDetectionThreshold = 2;
-    private const int UnitSpamDetectionThreshold = 9;
+    private const int UnitSpamDetectionThreshold = 5; // Ex 4 knights + 1 queen
+    private const int QueenRushdownThreshold = 10;
 
     public static void SetUnitStrategy()
     {
+        // Is enemy queen low?
+        if (EnemyQueenRef.Health <= QueenRushdownThreshold)
+        {
+            // Rush with knights
+            CurrentStrategy = UnitStrategy.MakeKnights;
+            return;
+        }
+
         // Is enemy spamming units?
         int unitCount = GetUnitCount(Owner.Enemy, null);
         if (unitCount > UnitSpamDetectionThreshold && GetUnitCount(Owner.Friendly, UnitType.Archer) < MaxArcherUnitCount)
@@ -116,21 +118,21 @@ public class UnitHandler
     {
         // Determine unit type to train depending on current strategy
         int targetRaxSubType = -1;
-        int unitCost = -1;
+        int targetUnitCost = -1;
         if (CurrentStrategy == UnitStrategy.MakeArchers)
         {
             targetRaxSubType = (int)UnitType.Archer;
-            unitCost = ArcherCost;
+            targetUnitCost = ArcherCost;
         }
         else if (CurrentStrategy == UnitStrategy.MakeKnights)
         {
             targetRaxSubType = (int)UnitType.Knight;
-            unitCost = KnightCost;
+            targetUnitCost = KnightCost;
         }
         else if (CurrentStrategy == UnitStrategy.MakeGiants)
         {
             targetRaxSubType = (int)UnitType.Giant;
-            unitCost = GiantCost;
+            targetUnitCost = GiantCost;
         }
         else
         {
@@ -138,36 +140,59 @@ public class UnitHandler
             SanityCheckFailed();
         }
 
-        // Find a site if possible
-        Site siteToTrainAt = null;
-        if (GoldAvailable >= unitCost)
-        {
-            for (int index = 0; index < SiteCount; index++)
-            {
-                Site siteIter = Sites[index];
+        // Train
+        var sitesToTrainAt = new List<Site>();
+        bool canAffordTargetUnit = GoldAvailable >= targetUnitCost;
+        bool canAffordAdditionalKnights = GoldAvailable >= (targetUnitCost + KnightCost);
 
-                if (siteIter.Type == StructureType.Barracks &&
-                    siteIter.Owner == Owner.Friendly &&
-                    siteIter.RangeOrType == targetRaxSubType &&
-                    siteIter.CooldownOrHealth == 0)
-                {
-                    siteToTrainAt = siteIter;
-                    break;
-                }
+        // Find a site for target unit if possible
+        if (canAffordTargetUnit)
+        {
+            Site targetRax = FindAvailableRaxOfType(targetRaxSubType);
+            if (targetRax != null)
+            {
+                Debug("Building target unit type " + targetRaxSubType);
+                sitesToTrainAt.Add(targetRax);
+                GoldAvailable -= targetUnitCost;
             }
         }
 
-        if (siteToTrainAt == null)
+        // Also buy knight if we can
+        if (canAffordAdditionalKnights)
         {
-            Command("TRAIN");
+            Site knightRax = FindAvailableRaxOfType((int)UnitType.Knight);
+            if (knightRax != null)
+            {
+                Debug("Building additional knight because we have spare gold");
+                sitesToTrainAt.Add(knightRax);
+                GoldAvailable -= KnightCost;
+            }
         }
-        else
-        {
-            Command("TRAIN " + siteToTrainAt.SiteId);
-            GoldAvailable -= KnightCost;
-        }
+
+        // Send command
+        string idList = "";
+        foreach (var iter in sitesToTrainAt)
+            idList += " " + iter.SiteId;
+        Command("TRAIN" + idList);
     }
 
+    private static Site FindAvailableRaxOfType(int subType)
+    {
+        for (int index = 0; index < SiteCount; index++)
+        {
+            Site siteIter = Sites[index];
+
+            if (siteIter.Type == StructureType.Barracks &&
+                siteIter.Owner == Owner.Friendly &&
+                siteIter.RangeOrType == subType &&
+                siteIter.CooldownOrHealth == 0)
+            {
+                return siteIter;
+            }
+        }
+
+        return null;
+    }
 
 }
 
@@ -675,11 +700,13 @@ public class MainLoop
             int y = int.Parse(ReadBuffer[1]);
             int owner = int.Parse(ReadBuffer[2]);
             int unitType = int.Parse(ReadBuffer[3]); // -1 = QUEEN, 0 = KNIGHT, 1 = ARCHER
+            int health = int.Parse(ReadBuffer[4]);
 
             Units[i] = new Unit();
             Units[i].Owner = (Owner)owner;
             Units[i].Type = (UnitType)unitType;
             Units[i].Location = new MapCoordinate(x, y);
+            Units[i].Health = health;
 
             // Update queen position
             if (unitType == (int)UnitType.Queen)
@@ -693,7 +720,6 @@ public class MainLoop
                     QueenRef = Units[i];
                 }
             }
-            //int health = int.Parse(inputs[4]);
         }
 
         // Read - Queen touching site
@@ -781,6 +807,13 @@ public static class Log
         Debug("WARNING - Sanity check failed");
         Command("SANITYCHECKFAILED");
     }
+}
+
+public enum UnitStrategy
+{
+    MakeKnights = 0,
+    MakeArchers = 1,
+    MakeGiants = 2
 }
 
 public enum UnitType
@@ -872,6 +905,7 @@ public class Unit
     public MapCoordinate Location;
     public UnitType Type;
     public Owner Owner = Owner.None;
+    public int Health = 0;
 
     public override string ToString()
     {
