@@ -1,0 +1,18 @@
+
+
+Härnäst:
+- Bygg inte byggnader i all evighet
+- Testa att rusha mitten och bygg ett torn där, sen ta allt bakom tornet och bygg barracker
+  - Sen efter det kampa tornet
+  - Radien man börjar med är nog en bra indikator
+
+
+
+Förbättringar:
+- Set ut som att param1 är antal sekunder kvar på cooldown, mao 0 = kan bygga
+- Bygg i barracken som är närmast fiende
+
+
+
+Svåra förbättringar:
+- Bygg i våger

@@ -1,5 +1,4 @@
 ﻿// Copyright Jesper Larsson 2019 @ Linköping, Sweden :)
-
 /*
   Output - First line: One of the following:
     WAIT Do nothing
@@ -42,7 +41,166 @@ using System.Collections.Generic;
 
 using static MapState;
 using static StaticConfig;
+using static Log;
 using static Utility;
+
+/// <summary>
+/// Main action taker
+/// </summary>
+public class StateEngine
+{
+    //private static int LastTrainIndex = -1;
+
+    public static void DetermineTrainAction()
+    {
+        Site siteToTrain = null;
+
+        if (GoldAvailable >= KnightCost)
+        {
+            for (int index = 0; index < SiteCount; index++)
+            {
+                Site siteIter = Sites[index];
+
+                if (siteIter.Type == StructureType.Barracks &&
+                    siteIter.Owner == Owner.Friendly &&
+                    siteIter.Cooldown == 0)
+                {
+                    siteToTrain = siteIter;
+                    break;
+                }
+            }
+        }
+
+        if (siteToTrain == null)
+        {
+            Command("TRAIN");
+        }
+        else
+        {
+            Command("TRAIN " + siteToTrain.SiteId);
+            GoldAvailable -= KnightCost;
+        }
+    }
+
+    public static void DetermineQueenAction()
+    {
+        if (QueenTouchedSiteOrNull != null && QueenTouchedSiteOrNull.Owner == Owner.None)
+        {
+            // Build barracks
+            Command($"BUILD {QueenTouchedSiteOrNull.SiteId} BARRACKS-KNIGHT");
+            //QueenTouchedSiteOrNull.HasBeenTaken = true;
+        }
+        else
+        {
+            // Move to closest
+            Site targetSite = FindClosestUnclaimedSite();
+            Debug("COMMAND - Moving to" + targetSite.SiteId);
+            Command($"MOVE {targetSite.Location.x} {targetSite.Location.y}");
+        }
+    }
+}
+
+public class StateEngineWrapper
+{
+    private static string[] ReadBuffer;
+
+    static void Init()
+    {
+        Debug("=====================");
+        Debug("START AT" + DateTime.Now);
+
+        MapState.SiteCount = int.Parse(Console.ReadLine());
+        MapState.Sites = new Site[MapState.SiteCount];
+
+        for (int i = 0; i < MapState.SiteCount; i++)
+        {
+            ReadBuffer = Console.ReadLine().Split(' ');
+            int siteId = int.Parse(ReadBuffer[0]);
+            int x = int.Parse(ReadBuffer[1]);
+            int y = int.Parse(ReadBuffer[2]);
+            int radius = int.Parse(ReadBuffer[3]);
+
+            MapState.Sites[i] = new Site(siteId, radius, new Point(x, y));
+        }
+    }
+
+    /// <summary>
+    /// App entry point
+    /// </summary>
+    static void Main(string[] args)
+    {
+        Init();
+
+        while (true)
+        {
+            ReadTurnInputs();
+
+            StateEngine.DetermineQueenAction();
+            StateEngine.DetermineTrainAction();
+
+            GoldAvailable += 10;
+        }
+    }
+
+    private static void ReadTurnInputs()
+    {
+        ReadBuffer = Console.ReadLine().Split(' ');
+
+        int gold = int.Parse(ReadBuffer[0]);
+        int touchedSiteId = int.Parse(ReadBuffer[1]); // -1 if none
+
+        // Read - Site states
+        for (int i = 0; i < MapState.SiteCount; i++)
+        {
+            ReadBuffer = Console.ReadLine().Split(' ');
+            int siteId = int.Parse(ReadBuffer[0]);
+            int structureType = int.Parse(ReadBuffer[3]); // -1 = No structure, 2 = Barracks
+            int owner = int.Parse(ReadBuffer[4]); // -1 = No structure, 0 = Friendly, 1 = Enemy
+            int param1 = int.Parse(ReadBuffer[5]);
+            //int param2 = int.Parse(ReadBuffer[6]);
+
+            Sites[siteId].Type = (StructureType)structureType;
+            Sites[siteId].Cooldown = param1;
+            Sites[siteId].Owner = (Owner)owner;
+        }
+
+        // Read - Unit states
+        int numUnits = int.Parse(Console.ReadLine());
+        Units = new Unit[numUnits];
+        for (int i = 0; i < numUnits; i++)
+        {
+            ReadBuffer = Console.ReadLine().Split(' ');
+            int x = int.Parse(ReadBuffer[0]);
+            int y = int.Parse(ReadBuffer[1]);
+            int owner = int.Parse(ReadBuffer[2]);
+            int unitType = int.Parse(ReadBuffer[3]); // -1 = QUEEN, 0 = KNIGHT, 1 = ARCHER
+
+            Units[i] = new Unit();
+            Units[i].Owner = (Owner)owner;
+            Units[i].Type = (UnitType)unitType;
+            Units[i].Location = new Point(x, y);
+
+            // Find pos of our queen
+            if (owner == 0 && unitType == (int)UnitType.Queen)
+            {
+                QueenRef = Units[i];
+            }
+
+            //int health = int.Parse(inputs[4]);
+        }
+
+        // Read - Queen touching site
+        if (touchedSiteId == -1)
+        {
+            QueenTouchedSiteOrNull = null;
+        }
+        else
+        {
+            Debug("  Touching site " + touchedSiteId);
+            QueenTouchedSiteOrNull = Sites[touchedSiteId];
+        }
+    }
+}
 
 public static class StaticConfig
 {
@@ -53,17 +211,22 @@ public static class StaticConfig
 
 public static class MapState
 {
-    /// <summary>
-    /// Index 0 = site ID 0 etc
-    /// </summary>
+    // Sites, index equals id, index 0 = id 0 etc
     public static Site[] Sites;
     public static int SiteCount;
 
-    public static QueenUnit Queen;
+    // Units
+    public static Unit[] Units;
+    public static int UnitCount;
+
+    // Queen
+    public static Unit QueenRef;
+    public static Site QueenTouchedSiteOrNull = null;
+
     public static int GoldAvailable = 100;
 }
 
-public static class Utility
+public static class Log
 {
     public static void Command(string arg)
     {
@@ -74,6 +237,29 @@ public static class Utility
     public static void Debug(string arg)
     {
         Console.Error.WriteLine(arg);
+    }
+}
+
+public static class Utility
+{
+    public static Site FindClosestUnclaimedSite()
+    {
+        double minDistance = double.MaxValue;
+        Site minSite = null;
+        foreach (var iter in Sites)
+        {
+            if (iter.Owner != Owner.None)
+                continue;
+
+            double distance = iter.Location.GetDistanceTo(QueenRef.Location);
+            if (distance < minDistance)
+            {
+                minDistance = distance;
+                minSite = iter;
+            }
+        }
+
+        return minSite;
     }
 }
 
@@ -90,6 +276,13 @@ public enum StructureType
     Barracks = 2
 }
 
+public enum Owner
+{
+    None = -1,
+    Friendly = 0,
+    Enemy = 1
+}
+
 /// <summary>
 /// Map site / possible build location
 /// </summary>
@@ -98,8 +291,12 @@ public class Site
     public int SiteId;
     public int Radius;
     public Point Location;
-    public bool HasBeenTaken = false;
+    //public bool HasBeenTaken = false;
     public StructureType Type = StructureType.None;
+    public Owner Owner = Owner.None;
+
+    // -1 = cannot build, 0 = can build, positive integer = cooldown left
+    public int Cooldown;
 
     public Site(int siteId, int radius, Point location)
     {
@@ -138,193 +335,11 @@ public class Unit
 {
     public Point Location;
     public UnitType Type;
+    public Owner Owner = Owner.None;
 
     public override string ToString()
     {
         string type = Enum.GetName(typeof(UnitType), this.Type);
         return $"[Unit {type}-{Location.ToString()}";
-    }
-}
-
-public class QueenUnit : Unit
-{
-    public Site TouchedSiteOrNull = null;
-
-    public QueenUnit() : base()
-    {
-        this.Type = UnitType.Queen;
-    }
-}
-
-/// <summary>
-/// Main class
-/// </summary>
-public class Player
-{
-    private static string[] ReadBuffer;
-    private static int LastTrainIndex = -1;
-
-    private static void MainTick()
-    {
-        ReadTurnInputs();
-
-        // Determine queen action
-        if (Queen.TouchedSiteOrNull != null && Queen.TouchedSiteOrNull.HasBeenTaken == false)
-        {
-            // Build barracks
-            Command($"BUILD {Queen.TouchedSiteOrNull.SiteId} BARRACKS-KNIGHT");
-            Queen.TouchedSiteOrNull.HasBeenTaken = true;
-        }
-        else
-        {
-            // Move to closest
-            Site targetSite = FindUnclaimedSite();
-            Debug("COMMAND - Moving to" + targetSite.SiteId);
-            Command($"MOVE {targetSite.Location.x} {targetSite.Location.y}");
-        }
-
-        // Train a batch of units
-        Site siteToTrain = null;
-        for (int index = (LastTrainIndex + 1); index < SiteCount; index++)
-        {
-            Site siteIter = Sites[index];
-
-            if (siteIter.HasBeenTaken && siteIter.Type == StructureType.Barracks)
-            {
-                LastTrainIndex = index;
-                siteToTrain = siteIter;
-                break;
-            }
-        }
-        if (siteToTrain == null)
-        {
-            for (int index = 0; index < LastTrainIndex; index++)
-            {
-                Site siteIter = Sites[index];
-
-                if (siteIter.HasBeenTaken && siteIter.Type == StructureType.Barracks)
-                {
-                    LastTrainIndex = index;
-                    siteToTrain = siteIter;
-                    break;
-                }
-            }
-        }
-        if (siteToTrain == null)
-            Command("TRAIN");
-        else
-            Command("TRAIN " + siteToTrain.SiteId);
-    }
-
-    private static Site FindUnclaimedSite()
-    {
-        double minDistance = double.MaxValue;
-        Site minSite = null;
-        foreach (var iter in Sites)
-        {
-            if (iter.HasBeenTaken)
-                continue;
-
-            double distance = iter.Location.GetDistanceTo(Queen.Location);
-            if (distance < minDistance)
-            {
-                minDistance = distance;
-                minSite = iter;
-            }
-        }
-
-        return minSite;
-    }
-
-    private static void ReadTurnInputs()
-    {
-        ReadBuffer = Console.ReadLine().Split(' ');
-
-        int gold = int.Parse(ReadBuffer[0]);
-        int touchedSiteId = int.Parse(ReadBuffer[1]); // -1 if none
-
-        // Read site states
-        for (int i = 0; i < MapState.SiteCount; i++)
-        {
-            ReadBuffer = Console.ReadLine().Split(' ');
-            int siteId = int.Parse(ReadBuffer[0]);
-            int structureType = int.Parse(ReadBuffer[3]); // -1 = No structure, 2 = Barracks
-            //int owner = int.Parse(ReadBuffer[4]); // -1 = No structure, 0 = Friendly, 1 = Enemy
-            //int param1 = int.Parse(inputs[5]);
-            //int param2 = int.Parse(inputs[6]);
-
-            Sites[siteId].Type = (StructureType)structureType;
-        }
-
-        // Read unit states
-        int numUnits = int.Parse(Console.ReadLine());
-        for (int i = 0; i < numUnits; i++)
-        {
-            ReadBuffer = Console.ReadLine().Split(' ');
-            int x = int.Parse(ReadBuffer[0]);
-            int y = int.Parse(ReadBuffer[1]);
-            int owner = int.Parse(ReadBuffer[2]);
-            int unitType = int.Parse(ReadBuffer[3]); // -1 = QUEEN, 0 = KNIGHT, 1 = ARCHER
-
-            // Find queen pos
-            if (owner == 0 && unitType == (int)UnitType.Queen)
-            {
-                if (Queen == null)
-                {
-                    Queen = new QueenUnit();
-                }
-                Queen.Location = new Point(x, y);
-                Debug("Queen location = " + Queen.Location);
-            }
-
-            //int health = int.Parse(inputs[4]);
-        }
-
-        // Read queen touching state
-        if (touchedSiteId == -1)
-        {
-            Queen.TouchedSiteOrNull = null;
-        }
-        else
-        {
-            Debug("Touching site " + touchedSiteId);
-            Queen.TouchedSiteOrNull = Sites[touchedSiteId];
-        }
-    }
-
-    static void Init(string[] args)
-    {
-        Debug("=====================");
-        Debug("START AT" + DateTime.Now);
-
-        MapState.SiteCount = int.Parse(Console.ReadLine());
-        MapState.Sites = new Site[MapState.SiteCount];
-
-        for (int i = 0; i < MapState.SiteCount; i++)
-        {
-            ReadBuffer = Console.ReadLine().Split(' ');
-            int siteId = int.Parse(ReadBuffer[0]);
-            int x = int.Parse(ReadBuffer[1]);
-            int y = int.Parse(ReadBuffer[2]);
-            int radius = int.Parse(ReadBuffer[3]);
-
-            Debug("  Init site " + siteId);
-            MapState.Sites[i] = new Site(siteId, radius, new Point(x, y));
-        }
-    }
-
-    /// <summary>
-    /// App entry point
-    /// </summary>
-    static void Main(string[] args)
-    {
-        Init(args);
-
-        while (true)
-        {
-            MainTick();
-
-            GoldAvailable += 10;
-        }
     }
 }
