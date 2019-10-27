@@ -221,7 +221,7 @@ public static class QueenHandler
             SendBuildCommand(structType, raxType);
         }
         else if (QueenTouchedSiteOrNull != null && QueenTouchedSiteOrNull.Owner == Owner.Friendly &&
-            QueenTouchedSiteOrNull.Type == StructureType.GoldMine && QueenTouchedSiteOrNull.TargetType == StructureType.GoldMine &&
+            QueenTouchedSiteOrNull.Type == StructureType.GoldMine &&
             QueenTouchedSiteOrNull.CooldownOrHealthOrIncome < QueenTouchedSiteOrNull.MaxMiningRate
             )
         {
@@ -229,7 +229,7 @@ public static class QueenHandler
             UpgradeMine();
         }
         else if (QueenTouchedSiteOrNull != null && QueenTouchedSiteOrNull.Owner == Owner.Friendly &&
-            QueenTouchedSiteOrNull.Type == StructureType.Tower && QueenTouchedSiteOrNull.TargetType == StructureType.Tower &&
+            QueenTouchedSiteOrNull.Type == StructureType.Tower &&
             QueenTouchedSiteOrNull.CooldownOrHealthOrIncome <= UpgradeThresholdHealth &&
             (!IsTowerShootingAtEnemy(QueenTouchedSiteOrNull))
             )
@@ -422,7 +422,7 @@ public static class QueenHandler
         for (int index = 0; index < SitesOrderedByInitialRange.Length; index++)
         {
             Site iter = SitesOrderedByInitialRange[index];
-            Debug("  Considering tertiary site " + iter);
+            //Debug("  Considering tertiary site " + iter);
 
             if (iter.Owner != Owner.None)
                 continue;
@@ -430,7 +430,7 @@ public static class QueenHandler
                 continue;
             if (IsInRangeOfEnemyTowers(iter.Location))
             {
-                Debug("    Ignoring site " + iter.SiteId + " because it's too close to an enemy tower");
+                //Debug("    Ignoring site " + iter.SiteId + " because it's too close to an enemy tower");
                 continue;
             }
             if (iter.OnActionCooldownUntilTick > CurrentGameTick)
@@ -442,7 +442,7 @@ public static class QueenHandler
             double distanceToEnemyHome = iter.Location.GetDistanceTo(EnemyQueenStartedAt);
             if (distanceToHome > distanceToEnemyHome)
             {
-                Debug("    Ignoring site " + iter.SiteId + " because it's too close to the enemy base");
+                //Debug("    Ignoring site " + iter.SiteId + " because it's too close to the enemy base");
                 continue; // Too dangerous, probably
             }
 
@@ -1134,6 +1134,11 @@ public class MainLoop
             Sites[siteId].RangeOrType = param2; // range for towers, unit type for rax
             Sites[siteId].MaxMiningRate = maxMiningRate;
             Sites[siteId].GoldRemaining = goldRemaining;
+
+            if (CurrentGameTick == 0)
+            {
+                Debug("Site Init - " + Sites[siteId].ToString());
+            }
         }
 
         // Read - Unit states
@@ -1350,7 +1355,7 @@ public class Site
 
     public override string ToString()
     {
-        return $"[Site {SiteId} {Location} {Owner} {Type} {OnActionCooldownUntilTick} {GoldRemaining}]";
+        return $"[Site {SiteId} {Location} Owner={Owner} MaxMining={MaxMiningRate} StructType={Type} Cooldown={OnActionCooldownUntilTick} Gold={GoldRemaining}]";
     }
 }
 
