@@ -174,7 +174,7 @@ public class UnitHandler
             if (siteIter.Type == StructureType.Barracks &&
                 siteIter.Owner == Owner.Friendly &&
                 siteIter.RangeOrType == subType &&
-                siteIter.CooldownOrHealth == 0)
+                siteIter.CooldownOrHealthOrIncome == 0)
             {
                 return siteIter;
             }
@@ -208,7 +208,7 @@ public static class QueenHandler
         }
         else if (QueenTouchedSiteOrNull != null && QueenTouchedSiteOrNull.Owner == Owner.Friendly && 
             QueenTouchedSiteOrNull.Type == StructureType.Tower && QueenTouchedSiteOrNull.TargetType == StructureType.Tower && 
-            QueenTouchedSiteOrNull.CooldownOrHealth <= UpgradeThresholdHealth)
+            QueenTouchedSiteOrNull.CooldownOrHealthOrIncome <= UpgradeThresholdHealth)
         {
             UpgradeTower();
         }
@@ -319,7 +319,7 @@ public static class QueenHandler
             if (distanceToCentralTower > CentralTower.RangeOrType)
                 continue;
 
-            if (iter.CooldownOrHealth < UpgradeThresholdHealth)
+            if (iter.CooldownOrHealthOrIncome < UpgradeThresholdHealth)
                 return iter;
         }
 
@@ -717,7 +717,6 @@ public class MainLoop
             UnitHandler.ApplyUnitStrategyToQueen();
             UnitHandler.DetermineTrainAction();
 
-            GoldAvailable += 10;
             IsFirstTurn = false;
         }
     }
@@ -747,6 +746,8 @@ public class MainLoop
         ReadBuffer = Console.ReadLine().Split(' ');
 
         int gold = int.Parse(ReadBuffer[0]);
+        GoldAvailable = gold;
+
         int touchedSiteId = int.Parse(ReadBuffer[1]); // -1 if none
 
         // Read - Site states
@@ -754,6 +755,8 @@ public class MainLoop
         {
             ReadBuffer = Console.ReadLine().Split(' ');
             int siteId = int.Parse(ReadBuffer[0]);
+            int goldRemaining = int.Parse(ReadBuffer[1]); // -1 = unknown
+            int maxMiningRate = int.Parse(ReadBuffer[2]); // -1 = unknown
             int structureType = int.Parse(ReadBuffer[3]);
             int owner = int.Parse(ReadBuffer[4]); ;
 
@@ -762,9 +765,11 @@ public class MainLoop
             int param2 = int.Parse(ReadBuffer[6]);
 
             Sites[siteId].Type = (StructureType)structureType;
-            Sites[siteId].CooldownOrHealth = param1; // cd for rax, health for towers
+            Sites[siteId].CooldownOrHealthOrIncome = param1; // cd for rax, health for towers
             Sites[siteId].Owner = (Owner)owner;
             Sites[siteId].RangeOrType = param2; // range for towers, unit type for rax
+            Sites[siteId].MaxMiningrate = maxMiningRate;
+            Sites[siteId].GoldRemaining = goldRemaining;
         }
 
         // Read - Unit states
@@ -914,6 +919,7 @@ public enum UnitType
 public enum StructureType
 {
     None = -1,
+    GoldMine = 0,
     Tower = 1,
     Barracks = 2,
 }
@@ -933,6 +939,8 @@ public class Site
     public int SiteId;
     public int CollisionRadius;
     public int RangeOrType;
+    public int GoldRemaining;
+    public int MaxMiningrate;
     public MapCoordinate Location;
 
     // Current type and planned type
@@ -943,7 +951,7 @@ public class Site
     public Owner Owner = Owner.None;
 
     // -1 = cannot build, 0 = can build, positive integer = cooldown left
-    public int CooldownOrHealth;
+    public int CooldownOrHealthOrIncome;
 
     public double DistanceFromInitialStart = double.MinValue;
 
