@@ -1,11 +1,9 @@
 
 
-Om torner man håller på att uppgradera redan skjuter på något, sluta uppgradera för stunden
-
 
 
 Förbättringar:
-- Numera kan centertorn hinna tas av fienden
+- Numera kan centertorn hinna tas av fienden, men kanske är rätt ovanligt
 - Drottningen kan fastna på saker om det råkar vara en site bara mitt i vägen till centrum eller så
 - Safe space checken fungerar inte helt, den verkar bara ta överlap mellan center circle och en annan
 

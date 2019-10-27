@@ -23,11 +23,12 @@ using static UtilityFunctions;
 public class UnitHandler
 {
     public static UnitStrategy CurrentStrategy = UnitStrategy.MakeArchers;
-    private const int TowerSpamDetectionThreshold = 2;
-    private const int UnitSpamDetectionThreshold = 3; // Larger than this => build archers
-    private const int QueenRushdownThreshold = 10; // Less than or equal => rush their queen
-    private const int RenewArchersUnderHealth = 5;
-    private const int RenewGiantsUnderHealth = 10;
+
+    private const int TowerSpamDetectionThreshold = 2; // More towers than this => build giants
+    private const int UnitSpamDetectionThreshold = 3; // More units than this => build more archers to defend
+    private const int QueenRushdownThreshold = 10; // Queens health less than => rush their queen and kill her now
+    private const int RenewArchersUnderHealth = 5; // Archer is dying when below this health and needs to be replaced
+    private const int RenewGiantsUnderHealth = 10; // Giant is dying when below this health and needs to be replaced
 
     public static void SetUnitStrategy()
     {
@@ -245,9 +246,32 @@ public static class QueenHandler
 
     private static void MoveQueen()
     {
+        // High priority - Build archer rax if necessary, we need it to defend early rushes
+        var wantedRax = DetermineBarracksTypeOrNone();
+        if (wantedRax == UnitType.Archer)
+        {
+            Site targetSite = FindClosestUnclaimedSafeSite();
+            targetSite.TargetType = StructureType.Barracks;
+            targetSite.TargetRaxType = wantedRax;
+
+            Debug("COMMAND - Moving to build priority rax at " + targetSite);
+            Command($"MOVE {targetSite.Location.x} {targetSite.Location.y}");
+            return;
+        }
+
+        // Move towards planned center tower
+        if (CentralTower.Owner == Owner.None)
+        {
+            CentralTower.TargetType = StructureType.Tower;
+
+            Debug("COMMAND - Moving to central tower at " + CentralTower);
+            Command($"MOVE {CentralTower.Location.x} {CentralTower.Location.y}");
+            return;
+        }
+
         // Build initial priority mines
         int activeMines = GetActiveMineCount();
-        if (activeMines < MinMineCount)
+        if (activeMines < PriorityMineCount)
         {
             Site mineLocation = FindMineLocation();
 
@@ -265,18 +289,7 @@ public static class QueenHandler
             }
         }
 
-        // Move towards planned center tower
-        if (CentralTower.Owner == Owner.None)
-        {
-            CentralTower.TargetType = StructureType.Tower;
-
-            Debug("COMMAND - Moving to central tower at " + CentralTower);
-            Command($"MOVE {CentralTower.Location.x} {CentralTower.Location.y}");
-            return;
-        }
-
         // Build rax if we want to
-        var wantedRax = DetermineBarracksTypeOrNone();
         if (wantedRax != UnitType.None)
         {
             Site targetSite = FindClosestUnclaimedSafeSite();
@@ -288,8 +301,17 @@ public static class QueenHandler
             return;
         }
 
+        // Kite enemy knights if necessary
+        Point? kiteLocation = DoWeNeedToKiteEnemyUnits();
+        if (kiteLocation.HasValue)
+        {
+            Debug("COMMAND - Kiting enemy knights towards " + kiteLocation.Value);
+            Command($"MOVE {kiteLocation.Value.X} {kiteLocation.Value.Y}");
+            return;
+        }
+
         // Build extra mines
-        if (activeMines < MaxMineCount)
+        if (activeMines < OptimalMineCount)
         {
             Site mineLocation = FindMineLocation();
 
@@ -335,15 +357,6 @@ public static class QueenHandler
             return;
         }
 
-        // Kite enemy knights if necessary
-        Point? kiteLocation = DoWeNeedToKiteEnemyUnits();
-        if (kiteLocation.HasValue)
-        {
-            Debug("COMMAND - Kiting enemy knights towards " + kiteLocation.Value);
-            Command($"MOVE {kiteLocation.Value.X} {kiteLocation.Value.Y}");
-            return;
-        }
-
         // Does a tower need ugprading / repair?
         Site towerToUpgrade = FindSafeTowerThatNeedsUpgrading();
         if (towerToUpgrade != null)
@@ -382,24 +395,32 @@ public static class QueenHandler
         double minDistance = double.MaxValue;
 
         // Search safe sites first
-        for (int index = 0; index < SitesOrderedByInitialRange.Length && index < TargetCentralSiteIndex; index++)
+        for (int index = 0; index < SitesOrderedByInitialRange.Length; index++)
         {
             Site iter = SitesOrderedByInitialRange[index];
+            Debug("  Considering tertiary site " + iter);
+
             if (iter.Owner != Owner.None)
                 continue;
             if (iter.Type != StructureType.None)
                 continue;
             if (IsInRangeOfEnemyTowers(iter.Location))
+            {
+                Debug("    Ignoring site " + iter.SiteId + " because it's too close to an enemy tower");
                 continue;
+            }
             if (iter.OnActionCooldownUntilTick > CurrentGameTick)
                 continue;
-            if (iter.GoldRemaining <= MinGoldAvailableThreshold)
+            if (iter.GoldRemaining != -1 && iter.GoldRemaining <= MinGoldAvailableThreshold)
                 continue;
 
             double distanceToHome = iter.Location.GetDistanceTo(QueenStartedAt);
             double distanceToEnemyHome = iter.Location.GetDistanceTo(EnemyQueenStartedAt);
             if (distanceToHome > distanceToEnemyHome)
+            {
+                Debug("    Ignoring site " + iter.SiteId + " because it's too close to the enemy base");
                 continue; // Too dangerous, probably
+            }
 
             double distance = iter.Location.GetDistanceTo(QueenRef.Location);
             if (distance < minDistance)
@@ -430,7 +451,7 @@ public static class QueenHandler
                 continue;
             if (iter.OnActionCooldownUntilTick > CurrentGameTick)
                 continue;
-            if (iter.GoldRemaining <= MinGoldAvailableThreshold)
+            if (iter.GoldRemaining != -1 && iter.GoldRemaining <= MinGoldAvailableThreshold)
                 continue;
 
             double distance = iter.Location.GetDistanceTo(QueenRef.Location);
@@ -657,7 +678,7 @@ public static class QueenHandler
 
     private static void SendBuildCommand(StructureType structType, UnitType raxType)
     {
-        Debug("Planned build of a " + Enum.GetName(typeof(StructureType), structType));
+        Debug("Building a " + Enum.GetName(typeof(StructureType), structType));
 
         // Send build command
         int touchedId = QueenTouchedSiteOrNull.SiteId;
@@ -753,19 +774,24 @@ public static class QueenHandler
         {
             // We just happend to touch something on the way somewhere
             Debug($"COMMAND - Happened to touch site " + QueenTouchedSiteOrNull + " on the way");
-            UnitType requestedRaxType = DetermineBarracksTypeOrNone();
 
-            // Set auto mode if we don't need a rax
-            if (requestedRaxType == UnitType.None)
-            {
-                structType = StructureType.None;
-                raxType = UnitType.None;
-            }
-            else
-            {
-                structType = StructureType.Barracks;
-                raxType = requestedRaxType;
-            }
+            // Auto mode
+            structType = StructureType.None;
+            raxType = UnitType.None;
+
+            //UnitType requestedRaxType = DetermineBarracksTypeOrNone();
+
+            //// Set auto mode if we don't need a rax
+            //if (requestedRaxType == UnitType.None)
+            //{
+            //    structType = StructureType.None;
+            //    raxType = UnitType.None;
+            //}
+            //else
+            //{
+            //    structType = StructureType.Barracks;
+            //    raxType = requestedRaxType;
+            //}
         }
     }
 
@@ -1100,8 +1126,8 @@ public static class BotBehaviour
     public const int MinGoldAvailableThreshold = 10;
     public const int MineActionTimeoutTicks = 10; // Number of ticks before a mine can be rebuilt
 
-    public const int MinMineCount = 3;
-    public const int MaxMineCount = 6;
+    public const int PriorityMineCount = 3;
+    public const int OptimalMineCount = 3 + PriorityMineCount; // Including priority mines, so total after extra mines are built
 
     public const int MaxGiantUnitCount = 1;
     public const int MaxArcherUnitCount = 4;
@@ -1239,7 +1265,7 @@ public class Site
 
     public override string ToString()
     {
-        return $"[Site {SiteId} {Location}]";
+        return $"[Site {SiteId} {Location} {Owner} {Type} {OnActionCooldownUntilTick} {GoldRemaining}]";
     }
 }
 
