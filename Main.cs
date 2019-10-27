@@ -243,7 +243,7 @@ public static class QueenHandler
             MoveQueen();
         }
     }
-    
+
     private static void MoveQueen()
     {
         // High priority - Build archer rax if necessary, we need it to defend early rushes
@@ -318,7 +318,7 @@ public static class QueenHandler
             Command($"MOVE {targetSite.Location.x} {targetSite.Location.y}");
             return;
         }
-        
+
         // Build extra mines
         if (activeMines < OptimalMineCount)
         {
@@ -571,11 +571,15 @@ public static class QueenHandler
         // More than this and we starting kiting
         const int KiteCountThreshold = 2;
         // Knight must be within this range
-        const int KiteDistanceThreshold = 350;
+        const int KiteStartDistanceThreshold = 600;
         const int DiscountUnitsBelowHealth = 5;
+
+        const int KiteTooCloseDistanceThreshold = 100;
+        const int KiteTooCloseCountThreshold = 2;
 
         // Get number of knights which are close to us
         int count = 0;
+        int tooCloseCount = 0;
         int enemyXTotal = 0;
         int enemyYTotal = 0;
         foreach (var iter in Units)
@@ -588,11 +592,16 @@ public static class QueenHandler
                 continue;
 
             double distance = iter.Location.GetDistanceTo(QueenRef.Location);
-            if (distance <= KiteDistanceThreshold)
+            if (distance <= KiteStartDistanceThreshold)
             {
                 enemyXTotal += iter.Location.x;
                 enemyYTotal += iter.Location.y;
                 count++;
+            }
+
+            if (distance <= KiteTooCloseDistanceThreshold)
+            {
+                tooCloseCount++;
             }
         }
 
@@ -601,6 +610,10 @@ public static class QueenHandler
 
         // Calculate where to kite to - Avoid enemy group while staying in tower range
         Point enemyGroupLocatedAt = new Point(enemyXTotal / count, enemyYTotal / count);
+
+        // They have gotten too close - Run to spawn
+        if (tooCloseCount >= KiteTooCloseCountThreshold)
+            return new Point(QueenStartedAt.x, QueenStartedAt.y);
 
         // Start kiting
         return CalculateKiteCoordinates(enemyGroupLocatedAt);
@@ -633,9 +646,12 @@ public static class QueenHandler
         // Kite to other side of the tower
         int xDiff = enemyGroupLocatedAt.X - pivotTower.Location.x;
         int yDiff = enemyGroupLocatedAt.Y - pivotTower.Location.y;
+        int xOppposite = pivotTower.Location.x - xDiff;
+        int yOpposite = pivotTower.Location.y - yDiff;
 
-        int x = pivotTower.Location.x - xDiff;
-        int y = pivotTower.Location.y - yDiff;
+        double degreesBetwwenOppositeSideAndTower = Math.Atan2(pivotTower.Location.x - xOppposite, pivotTower.Location.y - yOpposite) * 180.0 / Math.PI;
+        int x = (int)(pivotTower.Location.x + (pivotTower.RangeOrType * Math.Cos(degreesBetwwenOppositeSideAndTower)));
+        int y = (int)(pivotTower.Location.y + (pivotTower.RangeOrType * Math.Sin(degreesBetwwenOppositeSideAndTower)));
 
         // Sanity check boundries
         if (x < 0)
@@ -1220,7 +1236,7 @@ public static class BotBehaviour
     public const int OptimalMineCount = 3 + PriorityMineCount; // Including priority mines, so total after extra mines are built
 
     public const int MaxGiantUnitCount = 1;
-    public const int MaxArcherUnitCount = 4;
+    public const int MaxArcherUnitCount = 6;
     public const int MinArcherUnitCount = 2;
     //public const int MaxKnightUnitCount = int.MaxValue;
 
