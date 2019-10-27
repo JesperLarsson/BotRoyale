@@ -207,9 +207,9 @@ public static class QueenHandler
 
     public static void DetermineQueenAction()
     {
-        if (IsFirstTurn)
+        if (CurrentGameTick == 0)
         {
-            FirstTurnInit();
+            Init();
         }
 
         if (QueenTouchedSiteOrNull != null && QueenTouchedSiteOrNull.Owner == Owner.None)
@@ -230,7 +230,27 @@ public static class QueenHandler
 
     private static void QueenMainLoop()
     {
-        // Move towards center tile
+        // Build initial/replacement mines
+        int activeMines = GetActiveMineCount();
+        if (activeMines < MinMineCount)
+        {
+            Site mineLocation = FindMineLocation();
+
+            if (mineLocation != null)
+            {
+                mineLocation.TargetType = StructureType.GoldMine;
+
+                Debug("COMMAND - Moving to build priority mine at " + mineLocation);
+                Command($"MOVE {mineLocation.Location.x} {mineLocation.Location.y}");
+                return;
+            }
+            else
+            {
+                Debug("WARNING: Unable to find a gold mine location");
+            }
+        }
+
+        // Move towards planned center tower
         if (CentralTower.Owner == Owner.None)
         {
             CentralTower.TargetType = StructureType.Tower;
@@ -251,6 +271,25 @@ public static class QueenHandler
             Debug("COMMAND - Moving to build rax at " + targetSite);
             Command($"MOVE {targetSite.Location.x} {targetSite.Location.y}");
             return;
+        }
+
+        // Build extra mines
+        if (activeMines < MaxMineCount)
+        {
+            Site mineLocation = FindMineLocation();
+
+            if (mineLocation != null)
+            {
+                mineLocation.TargetType = StructureType.GoldMine;
+
+                Debug("COMMAND - Moving to build extra mine at " + mineLocation);
+                Command($"MOVE {mineLocation.Location.x} {mineLocation.Location.y}");
+                return;
+            }
+            else
+            {
+                Debug("WARNING: Unable to find a gold mine location");
+            }
         }
 
         // Find other tower location if it's safe and we have already upgraded our central tower
@@ -304,6 +343,79 @@ public static class QueenHandler
         Debug("COMMAND - Moving to safespot at " + safestPoint);
         Command($"MOVE {safestPoint.X} {safestPoint.Y}");
         return;
+    }
+
+    private static Site FindMineLocation()
+    {
+        // Action timeout prevents us from rebuilding the same mine that just got destroyed
+        Site location = null;
+        double minDistance = double.MaxValue;
+
+        // Search safe sites first
+        for (int index = 0; index < SitesOrderedByInitialRange.Length && index < TargetCentralSiteIndex; index++)
+        {
+            Site iter = SitesOrderedByInitialRange[index];
+            if (iter.Owner != Owner.None)
+                continue;
+            if (iter.Type != StructureType.None)
+                continue;
+            if (IsInRangeOfEnemyTowers(iter.Location))
+                continue;
+            if (iter.OnActionCooldownUntilTick > CurrentGameTick)
+                continue;
+            if (iter.GoldRemaining <= MinGoldAvailableThreshold)
+                continue;
+
+            double distance = iter.Location.GetDistanceTo(QueenRef.Location);
+            if (distance < minDistance)
+            {
+                minDistance = distance;
+                location = iter;
+            }
+        }
+
+        // Then less safe sites
+        for (int index = 0; index < SitesOrderedByInitialRange.Length; index++)
+        {
+            Site iter = SitesOrderedByInitialRange[index];
+            if (iter.Owner != Owner.None)
+                continue;
+            if (iter.Type != StructureType.None)
+                continue;
+            if (IsInRangeOfEnemyTowers(iter.Location))
+                continue;
+            if (iter.OnActionCooldownUntilTick > CurrentGameTick)
+                continue;
+            if (iter.GoldRemaining <= MinGoldAvailableThreshold)
+                continue;
+
+            double distance = iter.Location.GetDistanceTo(QueenRef.Location);
+            if (distance < minDistance)
+            {
+                minDistance = distance;
+                location = iter;
+            }
+        }
+
+        return location;
+    }
+
+    private static int GetActiveMineCount()
+    {
+        int count = 0;
+        foreach (var iter in Sites)
+        {
+            if (iter.Owner != Owner.Friendly)
+                continue;
+            if (iter.Type != StructureType.GoldMine)
+                continue;
+            if (iter.GoldRemaining <= MinGoldAvailableThreshold)
+                continue;
+
+            count++;
+        }
+
+        return count;
     }
 
     private static void UpgradeTower()
@@ -479,7 +591,7 @@ public static class QueenHandler
         int touchedId = QueenTouchedSiteOrNull.SiteId;
 
         // Determine type to build
-        StructureType structType = StructureType.Barracks;
+        StructureType structType;
         UnitType raxType;
         if (QueenTouchedSiteOrNull.TargetType == StructureType.Tower)
         {
@@ -491,17 +603,32 @@ public static class QueenHandler
         {
             // Higher layer ordered a specific building
             Debug("COMMAND - Building target building");
+            structType = StructureType.Barracks;
             raxType = QueenTouchedSiteOrNull.TargetRaxType;
+        }
+        else if (QueenTouchedSiteOrNull.TargetType == StructureType.GoldMine)
+        {
+            QueenTouchedSiteOrNull.OnActionCooldownUntilTick = CurrentGameTick + MineActionTimeoutTicks;
+            structType = StructureType.GoldMine;
+            raxType = UnitType.None;
         }
         else
         {
             // We just happend to touch something on the way somewhere
             Debug($"COMMAND - Happened to touch site " + QueenTouchedSiteOrNull + " on the way");
-            raxType = DetermineBarracksTypeOrNone();
+            UnitType requestedRaxType = DetermineBarracksTypeOrNone();
 
             // Set auto mode if we don't need a rax
-            if (raxType == UnitType.None)
+            if (requestedRaxType == UnitType.None)
+            {
                 structType = StructureType.None;
+                raxType = UnitType.None;
+            }
+            else
+            {
+                structType = StructureType.Barracks;
+                raxType = requestedRaxType;
+            }
         }
 
         // Send build command
@@ -522,7 +649,7 @@ public static class QueenHandler
             return;
         }
 
-        // Build rax
+        // Send build command - With barracks subtype
         if (structType != StructureType.Barracks)
         {
             Debug("Invalid build order");
@@ -606,7 +733,7 @@ public static class QueenHandler
         return minSite;
     }
 
-    private static void FirstTurnInit()
+    private static void Init()
     {
         // Find target site for our central tower
         //   Furthest possible tower that we can reach before the enemy queen
@@ -755,7 +882,7 @@ public class MainLoop
             UnitHandler.ApplyUnitStrategyToQueen();
             UnitHandler.DetermineTrainAction();
 
-            IsFirstTurn = false;
+            CurrentGameTick++;
         }
     }
 
@@ -854,7 +981,7 @@ public class MainLoop
         }
 
         // Debug info
-        if (IsFirstTurn)
+        if (CurrentGameTick == 0)
         {
             QueenStartedAt = QueenRef.Location;
             Debug("Our queen starts at " + QueenStartedAt);
@@ -876,6 +1003,11 @@ public static class StaticConfig
 public static class BotBehaviour
 {
     public const int UpgradeThresholdHealth = 400;
+    public const int MinGoldAvailableThreshold = 10;
+    public const int MineActionTimeoutTicks = 10; // Number of ticks before a mine can be rebuilt
+
+    public const int MinMineCount = 3;
+    public const int MaxMineCount = 6;
 
     public const int MaxGiantUnitCount = 1;
     public const int MaxArcherUnitCount = 4;
@@ -900,6 +1032,8 @@ public static class BotBehaviour
 
 public static class GameState
 {
+    public static int CurrentGameTick = 0;
+
     // Sites, index equals id, index 0 = id 0 etc
     public static Site[] Sites;
     public static int SiteCount;
@@ -915,7 +1049,6 @@ public static class GameState
     public static Site QueenTouchedSiteOrNull = null;
 
     public static int GoldAvailable = 100;
-    public static bool IsFirstTurn = true;
 }
 
 public static class Log
@@ -986,10 +1119,18 @@ public class Site
     public StructureType Type = StructureType.None;
     public StructureType TargetType = StructureType.None;
     public UnitType TargetRaxType = UnitType.None;
-
     public Owner Owner = Owner.None;
 
-    // -1 = cannot build, 0 = can build, positive integer = cooldown left
+    /// <summary>
+    /// Next action can be taken at
+    /// </summary>
+    public int OnActionCooldownUntilTick = 0;
+
+    /// <summary>
+    /// Rax = -1 = cannot build, 0 = can build, positive integer = cooldown left
+    /// Tower = Health
+    /// Mine = Income
+    /// </summary>
     public int CooldownOrHealthOrIncome;
 
     public double DistanceFromInitialStart = double.MinValue;

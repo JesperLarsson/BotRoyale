@@ -1,5 +1,11 @@
-Härnäst:
-Behöver anpassas för nya reglerna
+Bugfix, mines förstörs ifall de touchas. Blir oändlig loop
+
+
+Vid touch byggs rax över mines, även ifall vi vill ha dom
+
+Uppgradera gruvor när bygger dom
+
+
 
 
 
@@ -12,6 +18,7 @@ Support towers byt ut till mines?
 
 
 Förbättringar:
+- Numera kan centertorn hinna tas av fienden
 - Drottningen kan fastna på saker om det råkar vara en site bara mitt i vägen till centrum eller så
 - Safe space checken fungerar inte helt, den verkar bara ta överlap mellan center circle och en annan
 
