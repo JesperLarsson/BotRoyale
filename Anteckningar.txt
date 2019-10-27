@@ -2,6 +2,15 @@ Härnäst:
 Behöver anpassas för nya reglerna
 
 
+
+Om nära central tower => Ett till tower
+Annars mine
+
+Support towers byt ut till mines?
+
+
+
+
 Förbättringar:
 - Drottningen kan fastna på saker om det råkar vara en site bara mitt i vägen till centrum eller så
 - Safe space checken fungerar inte helt, den verkar bara ta överlap mellan center circle och en annan

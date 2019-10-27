@@ -31,6 +31,8 @@ public class UnitHandler
 
     public static void SetUnitStrategy()
     {
+        int archerCount = GetUnitCount(Owner.Friendly, UnitType.Archer, RenewArchersUnderHealth);
+
         // Is enemy queen low?
         if (EnemyQueenRef.Health <= QueenRushdownThreshold)
         {
@@ -40,9 +42,15 @@ public class UnitHandler
             return;
         }
 
+        // Are we low on archers?
+        if (archerCount < MinArcherUnitCount)
+        {
+            CurrentStrategy = UnitStrategy.MakeArchers;
+            return;
+        }
+
         // Is enemy spamming units?
-        int unitCount = GetUnitCount(Owner.Enemy, null);
-        if (unitCount > UnitSpamDetectionThreshold && GetUnitCount(Owner.Friendly, UnitType.Archer, RenewArchersUnderHealth) < MaxArcherUnitCount)
+        if (GetUnitCount(Owner.Enemy, null) > UnitSpamDetectionThreshold && archerCount < MaxArcherUnitCount)
         {
             CurrentStrategy = UnitStrategy.MakeArchers;
             return;
@@ -200,31 +208,27 @@ public static class QueenHandler
     public static void DetermineQueenAction()
     {
         if (IsFirstTurn)
+        {
             FirstTurnInit();
+        }
 
         if (QueenTouchedSiteOrNull != null && QueenTouchedSiteOrNull.Owner == Owner.None)
         {
             ConstructBuilding();
         }
-        else if (QueenTouchedSiteOrNull != null && QueenTouchedSiteOrNull.Owner == Owner.Friendly && 
-            QueenTouchedSiteOrNull.Type == StructureType.Tower && QueenTouchedSiteOrNull.TargetType == StructureType.Tower && 
+        else if (QueenTouchedSiteOrNull != null && QueenTouchedSiteOrNull.Owner == Owner.Friendly &&
+            QueenTouchedSiteOrNull.Type == StructureType.Tower && QueenTouchedSiteOrNull.TargetType == StructureType.Tower &&
             QueenTouchedSiteOrNull.CooldownOrHealthOrIncome <= UpgradeThresholdHealth)
         {
             UpgradeTower();
         }
         else
         {
-            MoveQueen();
+            QueenMainLoop();
         }
     }
 
-    private static void UpgradeTower()
-    {
-        Debug("COMMAND - Upgrading touched tower");
-        Command($"BUILD {QueenTouchedSiteOrNull.SiteId} TOWER");
-    }
-
-    private static void MoveQueen()
+    private static void QueenMainLoop()
     {
         // Move towards center tile
         if (CentralTower.Owner == Owner.None)
@@ -300,6 +304,12 @@ public static class QueenHandler
         Debug("COMMAND - Moving to safespot at " + safestPoint);
         Command($"MOVE {safestPoint.X} {safestPoint.Y}");
         return;
+    }
+
+    private static void UpgradeTower()
+    {
+        Debug("COMMAND - Upgrading touched tower");
+        Command($"BUILD {QueenTouchedSiteOrNull.SiteId} TOWER");
     }
 
     private static Site FindSafeTowerThatNeedsUpgrading()
@@ -469,10 +479,12 @@ public static class QueenHandler
         int touchedId = QueenTouchedSiteOrNull.SiteId;
 
         // Determine type to build
+        StructureType structType = StructureType.Barracks;
         UnitType raxType;
         if (QueenTouchedSiteOrNull.TargetType == StructureType.Tower)
         {
             // Higher layer ordered a tower
+            structType = StructureType.Tower;
             raxType = UnitType.None;
         }
         else if (QueenTouchedSiteOrNull.TargetType == StructureType.Barracks)
@@ -486,28 +498,54 @@ public static class QueenHandler
             // We just happend to touch something on the way somewhere
             Debug($"COMMAND - Happened to touch site " + QueenTouchedSiteOrNull + " on the way");
             raxType = DetermineBarracksTypeOrNone();
+
+            // Set auto mode if we don't need a rax
+            if (raxType == UnitType.None)
+                structType = StructureType.None;
         }
 
         // Send build command
+        if (structType == StructureType.Tower)
+        {
+            Command($"BUILD {touchedId} TOWER");
+            return;
+        }
+        else if (structType == StructureType.GoldMine)
+        {
+            Command($"BUILD {touchedId} MINE");
+            return;
+        }
+        else if (structType == StructureType.None)
+        {
+            // Auto pick something, TODO
+            Command($"BUILD {touchedId} MINE");
+            return;
+        }
+
+        // Build rax
+        if (structType != StructureType.Barracks)
+        {
+            Debug("Invalid build order");
+            SanityCheckFailed();
+        }
         if (raxType == UnitType.Knight)
         {
             Command($"BUILD {touchedId} BARRACKS-KNIGHT");
+            return;
         }
         else if (raxType == UnitType.Giant)
         {
             Command($"BUILD {touchedId} BARRACKS-GIANT");
+            return;
         }
         else if (raxType == UnitType.Archer)
         {
             Command($"BUILD {touchedId} BARRACKS-ARCHER");
-        }
-        else if (raxType == UnitType.None)
-        {
-            Command($"BUILD {touchedId} TOWER");
+            return;
         }
         else
         {
-            Debug("WARNING - Cant build building type");
+            Debug("WARNING - Cant build rax type");
             SanityCheckFailed();
         }
     }
@@ -534,12 +572,12 @@ public static class QueenHandler
                 archerCount++;
         }
 
-        if (giantCount < MaxGiantRax)
-            return UnitType.Giant;
-        if (knightCount < MaxKnightsRax)
-            return UnitType.Knight;
         if (archerCount < MaxArcherRax)
             return UnitType.Archer;
+        if (knightCount < MaxKnightsRax)
+            return UnitType.Knight;
+        if (giantCount < MaxGiantRax)
+            return UnitType.Giant;
 
         // We don't want a rax
         return UnitType.None;
@@ -765,10 +803,10 @@ public class MainLoop
             int param2 = int.Parse(ReadBuffer[6]);
 
             Sites[siteId].Type = (StructureType)structureType;
-            Sites[siteId].CooldownOrHealthOrIncome = param1; // cd for rax, health for towers
+            Sites[siteId].CooldownOrHealthOrIncome = param1; // cd for rax, health for towers, income rate for mines
             Sites[siteId].Owner = (Owner)owner;
             Sites[siteId].RangeOrType = param2; // range for towers, unit type for rax
-            Sites[siteId].MaxMiningrate = maxMiningRate;
+            Sites[siteId].MaxMiningRate = maxMiningRate;
             Sites[siteId].GoldRemaining = goldRemaining;
         }
 
@@ -841,6 +879,7 @@ public static class BotBehaviour
 
     public const int MaxGiantUnitCount = 1;
     public const int MaxArcherUnitCount = 4;
+    public const int MinArcherUnitCount = 2;
     //public const int MaxKnightUnitCount = int.MaxValue;
 
     public const int InitialMaxGiantRax = 0;
@@ -940,7 +979,7 @@ public class Site
     public int CollisionRadius;
     public int RangeOrType;
     public int GoldRemaining;
-    public int MaxMiningrate;
+    public int MaxMiningRate;
     public MapCoordinate Location;
 
     // Current type and planned type
