@@ -1,5 +1,9 @@
 
 
+Archers omm fiende bygger knight barrack
+Giants omm fiende bygger fler än 1-2 torn
+Annars pumps knights
+
 
 Förbättringar:
 - Drottning borde inte gå in i range av deras torn
