@@ -2,13 +2,24 @@
 När kitar bakåt, kolla efter torn att uppgradera
 
 
+Movement behöver kolla så att pathen inte intersectar med fiendens torn, annars planera en rutt runt
 
 
-När guld börjar ta slut
-  Gå till backlines och swappa runt byggnader, så rax blir gruvor och gruvorna rax
+Överväg att kolla vad deras queen gör 
+  Om de försöker pusha in i "mitt" terretorium, beräkna om man hinner dit innan dom, och i så fall rusha dit och bygg nått. Typ ett torn
+
+
+Om pathen man tar när man kitar är inom en move distance ifrån torner, gå till tornet istället så det uppgraderas
+
+
+
+
+
 
 
 Förbättringar:
+- När guld börjar ta slut
+  Gå till backlines och swappa runt byggnader, så rax blir gruvor och gruvorna rax
 - Numera kan centertorn hinna tas av fienden, men kanske är rätt ovanligt
 - Drottningen kan fastna på saker om det råkar vara en site bara mitt i vägen till centrum eller så
 - Safe space checken fungerar inte helt, den verkar bara ta överlap mellan center circle och en annan

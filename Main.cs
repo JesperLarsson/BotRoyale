@@ -311,12 +311,20 @@ public static class QueenHandler
         if (wantedRax != UnitType.None)
         {
             Site targetSite = FindClosestUnclaimedSafeSite();
-            targetSite.TargetType = StructureType.Barracks;
-            targetSite.TargetRaxType = wantedRax;
 
-            Debug("COMMAND - Moving to build rax at " + targetSite);
-            Command($"MOVE {targetSite.Location.x} {targetSite.Location.y}");
-            return;
+            if (targetSite != null)
+            {
+                targetSite.TargetType = StructureType.Barracks;
+                targetSite.TargetRaxType = wantedRax;
+
+                Debug("COMMAND - Moving to build rax at " + targetSite);
+                Command($"MOVE {targetSite.Location.x} {targetSite.Location.y}");
+                return;
+            }
+            else
+            {
+                Debug("No unclaimed safe site available");
+            }
         }
 
         // Build extra mines
