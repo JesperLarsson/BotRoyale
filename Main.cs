@@ -229,7 +229,9 @@ public static class QueenHandler
         }
         else if (QueenTouchedSiteOrNull != null && QueenTouchedSiteOrNull.Owner == Owner.Friendly &&
             QueenTouchedSiteOrNull.Type == StructureType.Tower && QueenTouchedSiteOrNull.TargetType == StructureType.Tower &&
-            QueenTouchedSiteOrNull.CooldownOrHealthOrIncome <= UpgradeThresholdHealth)
+            QueenTouchedSiteOrNull.CooldownOrHealthOrIncome <= UpgradeThresholdHealth &&
+            (!IsTowerShootingAtEnemy(QueenTouchedSiteOrNull))
+            )
         {
             // We're touching an un-upgraded tower - Upgrade it
             UpgradeTower();
@@ -470,6 +472,25 @@ public static class QueenHandler
     {
         Debug("COMMAND - Upgrading touched tower");
         Command($"BUILD {QueenTouchedSiteOrNull.SiteId} TOWER");
+    }
+
+    private static bool IsTowerShootingAtEnemy(Site tower)
+    {
+        int range = tower.RangeOrType;
+        foreach (var iter in Units)
+        {
+            if (iter.Owner != Owner.Enemy)
+                continue;
+
+            double distance = iter.Location.GetDistanceTo(tower.Location);
+            if (range <= distance)
+            {
+                Debug("Tower " + tower.SiteId + " is shooting at the enemy, stopping range upgrade");
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static Site FindSafeTowerThatNeedsUpgrading()
