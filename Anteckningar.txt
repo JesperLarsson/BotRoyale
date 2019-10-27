@@ -1,18 +1,4 @@
-Bugfix, mines förstörs ifall de touchas. Blir oändlig loop
-
-
 Vid touch byggs rax över mines, även ifall vi vill ha dom
-
-Uppgradera gruvor när bygger dom
-
-
-
-
-
-Om nära central tower => Ett till tower
-Annars mine
-
-Support towers byt ut till mines?
 
 
 

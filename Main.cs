@@ -209,33 +209,39 @@ public static class QueenHandler
     {
         if (CurrentGameTick == 0)
         {
+            // First time init
             Init();
         }
 
         if (QueenTouchedSiteOrNull != null && QueenTouchedSiteOrNull.Owner == Owner.None)
         {
-            ConstructBuilding();
+            // We're touching a neutral ground - Build something
+            DetermineWhatToBuild(out StructureType structType, out UnitType raxType);
+            SendBuildCommand(structType, raxType);
         }
         else if (QueenTouchedSiteOrNull != null && QueenTouchedSiteOrNull.Owner == Owner.Friendly &&
             QueenTouchedSiteOrNull.Type == StructureType.GoldMine && QueenTouchedSiteOrNull.TargetType == StructureType.GoldMine &&
             QueenTouchedSiteOrNull.CooldownOrHealthOrIncome < QueenTouchedSiteOrNull.MaxMiningRate
             )
         {
+            // We're touching an un-upgraded mine - Upgrade it
             UpgradeMine();
         }
         else if (QueenTouchedSiteOrNull != null && QueenTouchedSiteOrNull.Owner == Owner.Friendly &&
             QueenTouchedSiteOrNull.Type == StructureType.Tower && QueenTouchedSiteOrNull.TargetType == StructureType.Tower &&
             QueenTouchedSiteOrNull.CooldownOrHealthOrIncome <= UpgradeThresholdHealth)
         {
+            // We're touching an un-upgraded tower - Upgrade it
             UpgradeTower();
         }
         else
         {
-            QueenMainLoop();
+            // Pick somewhere else to move
+            MoveQueen();
         }
     }
 
-    private static void QueenMainLoop()
+    private static void MoveQueen()
     {
         // Build initial/replacement mines
         int activeMines = GetActiveMineCount();
@@ -381,28 +387,28 @@ public static class QueenHandler
             }
         }
 
-        // Then less safe sites
-        for (int index = 0; index < SitesOrderedByInitialRange.Length; index++)
-        {
-            Site iter = SitesOrderedByInitialRange[index];
-            if (iter.Owner != Owner.None)
-                continue;
-            if (iter.Type != StructureType.None)
-                continue;
-            if (IsInRangeOfEnemyTowers(iter.Location))
-                continue;
-            if (iter.OnActionCooldownUntilTick > CurrentGameTick)
-                continue;
-            if (iter.GoldRemaining <= MinGoldAvailableThreshold)
-                continue;
+        //// Then less safe sites
+        //for (int index = 0; index < SitesOrderedByInitialRange.Length; index++)
+        //{
+        //    Site iter = SitesOrderedByInitialRange[index];
+        //    if (iter.Owner != Owner.None)
+        //        continue;
+        //    if (iter.Type != StructureType.None)
+        //        continue;
+        //    if (IsInRangeOfEnemyTowers(iter.Location))
+        //        continue;
+        //    if (iter.OnActionCooldownUntilTick > CurrentGameTick)
+        //        continue;
+        //    if (iter.GoldRemaining <= MinGoldAvailableThreshold)
+        //        continue;
 
-            double distance = iter.Location.GetDistanceTo(QueenRef.Location);
-            if (distance < minDistance)
-            {
-                minDistance = distance;
-                location = iter;
-            }
-        }
+        //    double distance = iter.Location.GetDistanceTo(QueenRef.Location);
+        //    if (distance < minDistance)
+        //    {
+        //        minDistance = distance;
+        //        location = iter;
+        //    }
+        //}
 
         return location;
     }
@@ -599,13 +605,61 @@ public static class QueenHandler
         return false;
     }
 
-    private static void ConstructBuilding()
+    private static void SendBuildCommand(StructureType structType, UnitType raxType)
     {
+        // Send build command
         int touchedId = QueenTouchedSiteOrNull.SiteId;
+        if (structType == StructureType.Tower)
+        {
+            Command($"BUILD {touchedId} TOWER");
+            return;
+        }
+        else if (structType == StructureType.GoldMine)
+        {
+            Command($"BUILD {touchedId} MINE");
+            return;
+        }
+        else if (structType == StructureType.None)
+        {
+            // No building target queued for this site - Auto mode
+            // Mines should be a safe option
+            Command($"BUILD {touchedId} MINE");
+            return;
+        }
 
+        // Send build command - With barracks subtype
+        if (structType != StructureType.Barracks)
+        {
+            // This should have been a barracks
+            Debug("Invalid build order");
+            SanityCheckFailed();
+        }
+
+        if (raxType == UnitType.Knight)
+        {
+            Command($"BUILD {touchedId} BARRACKS-KNIGHT");
+            return;
+        }
+        else if (raxType == UnitType.Giant)
+        {
+            Command($"BUILD {touchedId} BARRACKS-GIANT");
+            return;
+        }
+        else if (raxType == UnitType.Archer)
+        {
+            Command($"BUILD {touchedId} BARRACKS-ARCHER");
+            return;
+        }
+        else
+        {
+            Debug("WARNING - Cant build rax type");
+            SanityCheckFailed();
+        }
+    }
+
+    private static void DetermineWhatToBuild(out StructureType structType, out UnitType raxType)
+    {
         // Determine type to build
-        StructureType structType;
-        UnitType raxType;
         if (QueenTouchedSiteOrNull.TargetType == StructureType.Tower)
         {
             // Higher layer ordered a tower
@@ -642,51 +696,6 @@ public static class QueenHandler
                 structType = StructureType.Barracks;
                 raxType = requestedRaxType;
             }
-        }
-
-        // Send build command
-        if (structType == StructureType.Tower)
-        {
-            Command($"BUILD {touchedId} TOWER");
-            return;
-        }
-        else if (structType == StructureType.GoldMine)
-        {
-            Command($"BUILD {touchedId} MINE");
-            return;
-        }
-        else if (structType == StructureType.None)
-        {
-            // Auto pick something, TODO
-            Command($"BUILD {touchedId} MINE");
-            return;
-        }
-
-        // Send build command - With barracks subtype
-        if (structType != StructureType.Barracks)
-        {
-            Debug("Invalid build order");
-            SanityCheckFailed();
-        }
-        if (raxType == UnitType.Knight)
-        {
-            Command($"BUILD {touchedId} BARRACKS-KNIGHT");
-            return;
-        }
-        else if (raxType == UnitType.Giant)
-        {
-            Command($"BUILD {touchedId} BARRACKS-GIANT");
-            return;
-        }
-        else if (raxType == UnitType.Archer)
-        {
-            Command($"BUILD {touchedId} BARRACKS-ARCHER");
-            return;
-        }
-        else
-        {
-            Debug("WARNING - Cant build rax type");
-            SanityCheckFailed();
         }
     }
 
