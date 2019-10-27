@@ -243,7 +243,7 @@ public static class QueenHandler
 
     private static void MoveQueen()
     {
-        // Build initial/replacement mines
+        // Build initial priority mines
         int activeMines = GetActiveMineCount();
         if (activeMines < MinMineCount)
         {
@@ -351,11 +351,63 @@ public static class QueenHandler
             return;
         }
 
+        // Tertiary mines if available
+        Site tertiaryMineLocation = FindTertiaryMineLocation();
+        if (tertiaryMineLocation != null)
+        {
+            tertiaryMineLocation.TargetType = StructureType.GoldMine;
+
+            Debug("COMMAND - Moving to build tertiary mine at " + tertiaryMineLocation);
+            Command($"MOVE {tertiaryMineLocation.Location.x} {tertiaryMineLocation.Location.y}");
+            return;
+        }
+        else
+        {
+            Debug("No tertiary mine location available");
+        }
+
         // Fallback strategy, we have nothing to do - Find safest spot and stay there
         Point safestPoint = FindGeneralSafeSpotForQueen();
         Debug("COMMAND - Moving to safespot at " + safestPoint);
         Command($"MOVE {safestPoint.X} {safestPoint.Y}");
         return;
+    }
+
+    private static Site FindTertiaryMineLocation()
+    {
+        // Action timeout prevents us from rebuilding the same mine that just got destroyed
+        Site location = null;
+        double minDistance = double.MaxValue;
+
+        // Search safe sites first
+        for (int index = 0; index < SitesOrderedByInitialRange.Length && index < TargetCentralSiteIndex; index++)
+        {
+            Site iter = SitesOrderedByInitialRange[index];
+            if (iter.Owner != Owner.None)
+                continue;
+            if (iter.Type != StructureType.None)
+                continue;
+            if (IsInRangeOfEnemyTowers(iter.Location))
+                continue;
+            if (iter.OnActionCooldownUntilTick > CurrentGameTick)
+                continue;
+            if (iter.GoldRemaining <= MinGoldAvailableThreshold)
+                continue;
+
+            double distanceToHome = iter.Location.GetDistanceTo(QueenStartedAt);
+            double distanceToEnemyHome = iter.Location.GetDistanceTo(EnemyQueenStartedAt);
+            if (distanceToHome > distanceToEnemyHome)
+                continue; // Too dangerous, probably
+
+            double distance = iter.Location.GetDistanceTo(QueenRef.Location);
+            if (distance < minDistance)
+            {
+                minDistance = distance;
+                location = iter;
+            }
+        }
+
+        return location;
     }
 
     private static Site FindMineLocation()
@@ -386,29 +438,6 @@ public static class QueenHandler
                 location = iter;
             }
         }
-
-        //// Then less safe sites
-        //for (int index = 0; index < SitesOrderedByInitialRange.Length; index++)
-        //{
-        //    Site iter = SitesOrderedByInitialRange[index];
-        //    if (iter.Owner != Owner.None)
-        //        continue;
-        //    if (iter.Type != StructureType.None)
-        //        continue;
-        //    if (IsInRangeOfEnemyTowers(iter.Location))
-        //        continue;
-        //    if (iter.OnActionCooldownUntilTick > CurrentGameTick)
-        //        continue;
-        //    if (iter.GoldRemaining <= MinGoldAvailableThreshold)
-        //        continue;
-
-        //    double distance = iter.Location.GetDistanceTo(QueenRef.Location);
-        //    if (distance < minDistance)
-        //    {
-        //        minDistance = distance;
-        //        location = iter;
-        //    }
-        //}
 
         return location;
     }
@@ -607,6 +636,8 @@ public static class QueenHandler
 
     private static void SendBuildCommand(StructureType structType, UnitType raxType)
     {
+        Debug("Planned build of a " + Enum.GetName(typeof(StructureType), structType));
+
         // Send build command
         int touchedId = QueenTouchedSiteOrNull.SiteId;
         if (structType == StructureType.Tower)
@@ -622,8 +653,17 @@ public static class QueenHandler
         else if (structType == StructureType.None)
         {
             // No building target queued for this site - Auto mode
-            // Mines should be a safe option
-            Command($"BUILD {touchedId} MINE");
+            Debug("Auto-picking a build because we touched an unplanned site");
+
+            if (QueenTouchedSiteOrNull.OnActionCooldownUntilTick <= CurrentGameTick)
+            {
+                QueenTouchedSiteOrNull.OnActionCooldownUntilTick = CurrentGameTick + MineActionTimeoutTicks;
+                Command($"BUILD {touchedId} MINE");
+            }
+            else
+            {
+                Command($"BUILD {touchedId} TOWER");
+            }
             return;
         }
 
@@ -675,9 +715,18 @@ public static class QueenHandler
         }
         else if (QueenTouchedSiteOrNull.TargetType == StructureType.GoldMine)
         {
-            QueenTouchedSiteOrNull.OnActionCooldownUntilTick = CurrentGameTick + MineActionTimeoutTicks;
-            structType = StructureType.GoldMine;
-            raxType = UnitType.None;
+            if (QueenTouchedSiteOrNull.OnActionCooldownUntilTick < CurrentGameTick)
+            {
+                QueenTouchedSiteOrNull.OnActionCooldownUntilTick = CurrentGameTick + MineActionTimeoutTicks;
+                structType = StructureType.GoldMine;
+                raxType = UnitType.None;
+            }
+            else
+            {
+                // Mine just got destroyed - Build a tower instead
+                structType = StructureType.Tower;
+                raxType = UnitType.None;
+            }
         }
         else
         {
@@ -898,6 +947,7 @@ public class MainLoop
         {
             ReadTurnInputs();
 
+            Debug("Begin game tick nr " + CurrentGameTick);
             QueenHandler.DetermineQueenAction();
 
             UnitHandler.SetUnitStrategy();
@@ -1006,8 +1056,9 @@ public class MainLoop
         if (CurrentGameTick == 0)
         {
             QueenStartedAt = QueenRef.Location;
+            EnemyQueenStartedAt = EnemyQueenRef.Location;
             Debug("Our queen starts at " + QueenStartedAt);
-            Debug("Enemy queen starts at " + EnemyQueenRef.Location);
+            Debug("Enemy queen starts at " + EnemyQueenStartedAt);
         }
     }
 }
@@ -1068,6 +1119,7 @@ public static class GameState
     public static Unit QueenRef;
     public static MapCoordinate QueenStartedAt;
     public static Unit EnemyQueenRef;
+    public static MapCoordinate EnemyQueenStartedAt;
     public static Site QueenTouchedSiteOrNull = null;
 
     public static int GoldAvailable = 100;
