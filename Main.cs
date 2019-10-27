@@ -217,6 +217,13 @@ public static class QueenHandler
             ConstructBuilding();
         }
         else if (QueenTouchedSiteOrNull != null && QueenTouchedSiteOrNull.Owner == Owner.Friendly &&
+            QueenTouchedSiteOrNull.Type == StructureType.GoldMine && QueenTouchedSiteOrNull.TargetType == StructureType.GoldMine &&
+            QueenTouchedSiteOrNull.CooldownOrHealthOrIncome < QueenTouchedSiteOrNull.MaxMiningRate
+            )
+        {
+            UpgradeMine();
+        }
+        else if (QueenTouchedSiteOrNull != null && QueenTouchedSiteOrNull.Owner == Owner.Friendly &&
             QueenTouchedSiteOrNull.Type == StructureType.Tower && QueenTouchedSiteOrNull.TargetType == StructureType.Tower &&
             QueenTouchedSiteOrNull.CooldownOrHealthOrIncome <= UpgradeThresholdHealth)
         {
@@ -416,6 +423,12 @@ public static class QueenHandler
         }
 
         return count;
+    }
+
+    private static void UpgradeMine()
+    {
+        Debug("COMMAND - Upgrading touched mine");
+        Command($"BUILD {QueenTouchedSiteOrNull.SiteId} MINE");
     }
 
     private static void UpgradeTower()
@@ -976,7 +989,7 @@ public class MainLoop
         }
         else
         {
-            Debug("  Queen is touching site " + touchedSiteId);
+            Debug("  Queen touching site " + touchedSiteId);
             QueenTouchedSiteOrNull = Sites[touchedSiteId];
         }
 
