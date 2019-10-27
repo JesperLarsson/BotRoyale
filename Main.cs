@@ -1,59 +1,27 @@
-﻿// Copyright Jesper Larsson 2019 @ Linköping, Sweden :)
-/*
-  Output - First line: One of the following:
-    WAIT Do nothing
-    MOVE x y Will attempt to move towards the provided coordinates (x,y given as integers)
-    BUILD {siteId} BARRACKS-{type} Will attempt to build a barracks at the indicated site. If too far away, the Queen will instead move towards the site. The type must be given as either KNIGHT or ARCHER.
-
-  Second line: TRAIN optionally followed by a list of siteId integers to start training at. 
-      
-
-Structures
-    Structures can be built at no cost. A Queen character can build a structure (using the BUILD command) on a building site that she is in contact with. The variable touchedSite indicates the identifier of the building site that she is in contact with, -1 if not.
-    There is one type of structure:
-        BARRACKS-{type}: A player needs to build a BARRACKS with their Queen in order to train creeps ({type} can be KNIGHT or ARCHER). Every barracks is built with the ability to train a single creep type. Barracks are available for use on the turn immediately following their construction. A barracks is destroyed if it is touched by the enemy Queen.
-    If she so chooses, a Queen can replace an existing friendly structure simply by building another one in its place (unless it is a Barracks that is currently training).
- 
-Gold
-    Each player begins with 100 gold and will gain 10 gold at the end of each turn.
- 
-Creeps
-    In order to destroy the enemy Queen, a player will need to build creeps. Once built, creeps follow very simple behaviours (see below), and cannot be controlled by the player. Creeps will eventually age and die on their own, losing 1 HP every turn.
-    There are two different creep types that can be built.
-
-        KNIGHT units are light, fast units which attack the enemy Queen. They cost 80 gold to train a group of 4.
-        ARCHER units are slower, ranged units which move toward and attack nearby enemy creeps from a short distance. They cost 100 gold to train a group of 2. Note: ARCHER units do not attack the enemy Queen!
-    
-Training Creeps
-    A player trains creeps (using the TRAIN command) by indicating the identifiers of which sites containing a barracks they wish to train creeps at. A barracks that is already in the middle of training cannot begin training again until the current creep set is built. Also, such a barracks cannot be replaced by another structure. Examples:
-        TRAIN 13 6 19 - Three barracks begin training creeps
-        TRAIN 14 - One barracks begins training creeps
-    When the train commands are sent, the player pays the total cost in gold, and indicated barracks will begin training the appropriate set of units. After the appointed number of turns elapses, a set of creeps emerges from the barracks and begins acting by themselves on the following turn.
-    The training of creeps represent an extra mandatory command every turn. For barracks not to begin training new units, a player has to use the TRAIN command with no identifier.
+﻿/*
+ * Basic bot for Code Royale
+ * Copyright Jesper Larsson 2019 @ Linköping, Sweden
+ * :)
  */
 
 using System;
-using System.Linq;
 using System.IO;
 using System.Text;
 using System.Collections;
 using System.Collections.Generic;
 
-using static MapState;
+using static GameState;
 using static StaticConfig;
 using static Log;
-using static Utility;
 
 /// <summary>
-/// Main action taker
+/// Handles unit logic
 /// </summary>
-public class StateEngine
+public class UnitHandler
 {
-    //private static int LastTrainIndex = -1;
-
     public static void DetermineTrainAction()
     {
-        Site siteToTrain = null;
+        Site siteToTrainAt = null;
 
         if (GoldAvailable >= KnightCost)
         {
@@ -65,64 +33,214 @@ public class StateEngine
                     siteIter.Owner == Owner.Friendly &&
                     siteIter.Cooldown == 0)
                 {
-                    siteToTrain = siteIter;
+                    siteToTrainAt = siteIter;
                     break;
                 }
             }
         }
 
-        if (siteToTrain == null)
+        if (siteToTrainAt == null)
         {
             Command("TRAIN");
         }
         else
         {
-            Command("TRAIN " + siteToTrain.SiteId);
+            Command("TRAIN " + siteToTrainAt.SiteId);
             GoldAvailable -= KnightCost;
-        }
-    }
-
-    public static void DetermineQueenAction()
-    {
-        if (QueenTouchedSiteOrNull != null && QueenTouchedSiteOrNull.Owner == Owner.None)
-        {
-            // Build barracks
-            Command($"BUILD {QueenTouchedSiteOrNull.SiteId} BARRACKS-KNIGHT");
-            //QueenTouchedSiteOrNull.HasBeenTaken = true;
-        }
-        else
-        {
-            // Move to closest
-            Site targetSite = FindClosestUnclaimedSite();
-            Debug("COMMAND - Moving to" + targetSite.SiteId);
-            Command($"MOVE {targetSite.Location.x} {targetSite.Location.y}");
         }
     }
 }
 
-public class StateEngineWrapper
+/// <summary>
+/// Handles building logic.
+/// 
+/// Current:
+/// 1. Find middle point, rush it
+/// 2. Build tower at point
+/// 3. Walk backwards and start building raxes
+/// </summary>
+public static class QueenHandler
 {
-    private static string[] ReadBuffer;
+    private const int MaxActiveRax = 2;
 
-    static void Init()
+    private static Site TargetCentralSite;
+
+    private static Site[] SitesOrderedByInitialRange;
+    private static int TargetCentralSiteIndex = -1;
+
+    public static void DetermineQueenAction()
     {
-        Debug("=====================");
-        Debug("START AT" + DateTime.Now);
+        if (IsFirstTurn)
+            FirstTurnInit();
 
-        MapState.SiteCount = int.Parse(Console.ReadLine());
-        MapState.Sites = new Site[MapState.SiteCount];
-
-        for (int i = 0; i < MapState.SiteCount; i++)
+        if (QueenTouchedSiteOrNull != null && QueenTouchedSiteOrNull.Owner == Owner.None)
         {
-            ReadBuffer = Console.ReadLine().Split(' ');
-            int siteId = int.Parse(ReadBuffer[0]);
-            int x = int.Parse(ReadBuffer[1]);
-            int y = int.Parse(ReadBuffer[2]);
-            int radius = int.Parse(ReadBuffer[3]);
-
-            MapState.Sites[i] = new Site(siteId, radius, new Point(x, y));
+            ConstructBuilding();
+        }
+        else
+        {
+            MoveQueen();
         }
     }
+
+    private static void MoveQueen()
+    {
+        // Move towards center tile
+        if (TargetCentralSite.Owner == Owner.None)
+        {
+            Debug("COMMAND - Moving to central tower at " + TargetCentralSite);
+            Command($"MOVE {TargetCentralSite.Location.x} {TargetCentralSite.Location.y}");
+            return;
+        }
+
+        // Build rax if we want to
+        bool wantToBuildRax = CalculateNumberOfBarracksWeOwn() < MaxActiveRax;
+        if (wantToBuildRax)
+        {
+            Site targetSite = FindClosestUnclaimedSafeSite();
+            Debug("COMMAND - Moving to build rax at " + targetSite);
+            Command($"MOVE {targetSite.Location.x} {targetSite.Location.y}");
+            return;
+        }
+
+        // Otherwise move to central tower for protection
+        if (QueenTouchedSiteOrNull == null || QueenTouchedSiteOrNull != TargetCentralSite)
+        {
+            Debug("COMMAND - Falling back to central tower at " + TargetCentralSite);
+            Command($"MOVE {TargetCentralSite.Location.x} {TargetCentralSite.Location.y}");
+            return;
+        }
+
+        // Start upgrading tower
+        Debug("COMMAND - Upgrading central tower at " + TargetCentralSite);
+        Command($"BUILD {TargetCentralSite.SiteId} TOWER");
+        return;
+    }
+
+    private static void ConstructBuilding()
+    {
+        int touchedId = QueenTouchedSiteOrNull.SiteId;
+
+        if (QueenTouchedSiteOrNull == TargetCentralSite)
+        {
+            Command($"BUILD {touchedId} TOWER");
+        }
+        else
+        {
+            Command($"BUILD {touchedId} BARRACKS-KNIGHT");
+        }
+    }
+
+    private static int CalculateNumberOfBarracksWeOwn()
+    {
+        int count = 0;
+        foreach (var site in Sites)
+        {
+            if (site.Owner != Owner.Friendly)
+                continue;
+            if (site.Type != StructureType.Barracks)
+                continue;
+
+            count++;
+        }
+
+        return count;
+    }
+
+    //public static Site FindClosestUnclaimedSite()
+    //{
+    //    double minDistance = double.MaxValue;
+    //    Site minSite = null;
+    //    foreach (var iter in Sites)
+    //    {
+    //        if (iter.Owner != Owner.None)
+    //            continue;
+
+    //        double distance = iter.Location.GetDistanceTo(QueenRef.Location);
+    //        if (distance < minDistance)
+    //        {
+    //            minDistance = distance;
+    //            minSite = iter;
+    //        }
+    //    }
+
+    //    return minSite;
+    //}
+
+    public static Site FindClosestUnclaimedSafeSite()
+    {
+        // It's safer to "fall back" towards our spawn
+        double minDistance = double.MaxValue;
+        Site minSite = null;
+        for (int index = 0; index < SitesOrderedByInitialRange.Length && index < TargetCentralSiteIndex; index++)
+        {
+            Site iter = SitesOrderedByInitialRange[index];
+
+            if (iter.Owner != Owner.None)
+                continue; // Someone already owns it
+
+            double distance = iter.Location.GetDistanceTo(QueenRef.Location);
+            if (distance < minDistance)
+            {
+                minDistance = distance;
+                minSite = iter;
+            }
+        }
+
+        return minSite;
+    }
+
+    private static void FirstTurnInit()
+    {
+        // Find target site for our central tower
+        //   Furthest possible tower that we can reach before the enemy queen
+        var enemyQueenLocation = EnemyQueenRef.Location;
+        var queenLocation = QueenRef.Location;
+        double maxDistance = double.MinValue;
+        var sitesByDistance = new List<Site>();
+
+        foreach (Site siteIter in Sites)
+        {
+            double ourDistanceToSite = siteIter.Location.GetDistanceTo(queenLocation);
+            double enemyDistanceToSite = siteIter.Location.GetDistanceTo(enemyQueenLocation);
+
+            siteIter.DistanceFromInitialStart = ourDistanceToSite;
+            sitesByDistance.Add(siteIter);
+
+            if (enemyDistanceToSite < ourDistanceToSite)
+                continue;
+
+            if (ourDistanceToSite > maxDistance)
+            {
+                maxDistance = ourDistanceToSite;
+                TargetCentralSite = siteIter;
+            }
+        }
+
+        // Sort list of sites by distance
+        sitesByDistance.Sort(delegate (Site c1, Site c2) { return c1.DistanceFromInitialStart.CompareTo(c2.DistanceFromInitialStart); });
+        SitesOrderedByInitialRange = sitesByDistance.ToArray();
+
+        // Find central site in sorted data
+        for (int index = 0; index < SitesOrderedByInitialRange.Length; index++)
+        {
+            if (SitesOrderedByInitialRange[index] == TargetCentralSite)
+            {
+                TargetCentralSiteIndex = index;
+                break;
+            }
+        }
+
+        Debug("Found target center site: " + TargetCentralSite);
+    }
+}
+
+/// <summary>
+/// Main loop
+/// </summary>
+public class MainLoop
+{
+    private static string[] ReadBuffer;
 
     /// <summary>
     /// App entry point
@@ -135,10 +253,31 @@ public class StateEngineWrapper
         {
             ReadTurnInputs();
 
-            StateEngine.DetermineQueenAction();
-            StateEngine.DetermineTrainAction();
+            QueenHandler.DetermineQueenAction();
+            UnitHandler.DetermineTrainAction();
 
             GoldAvailable += 10;
+            IsFirstTurn = false;
+        }
+    }
+
+    static void Init()
+    {
+        Debug("=====================");
+        Debug("START AT" + DateTime.Now);
+
+        GameState.SiteCount = int.Parse(Console.ReadLine());
+        GameState.Sites = new Site[GameState.SiteCount];
+
+        for (int i = 0; i < GameState.SiteCount; i++)
+        {
+            ReadBuffer = Console.ReadLine().Split(' ');
+            int siteId = int.Parse(ReadBuffer[0]);
+            int x = int.Parse(ReadBuffer[1]);
+            int y = int.Parse(ReadBuffer[2]);
+            int radius = int.Parse(ReadBuffer[3]);
+
+            GameState.Sites[i] = new Site(siteId, radius, new Point(x, y));
         }
     }
 
@@ -150,18 +289,21 @@ public class StateEngineWrapper
         int touchedSiteId = int.Parse(ReadBuffer[1]); // -1 if none
 
         // Read - Site states
-        for (int i = 0; i < MapState.SiteCount; i++)
+        for (int i = 0; i < GameState.SiteCount; i++)
         {
             ReadBuffer = Console.ReadLine().Split(' ');
             int siteId = int.Parse(ReadBuffer[0]);
             int structureType = int.Parse(ReadBuffer[3]); // -1 = No structure, 2 = Barracks
             int owner = int.Parse(ReadBuffer[4]); // -1 = No structure, 0 = Friendly, 1 = Enemy
-            int param1 = int.Parse(ReadBuffer[5]);
-            //int param2 = int.Parse(ReadBuffer[6]);
+
+            // Guessed from input data
+            int cd = int.Parse(ReadBuffer[5]);
+            int range = int.Parse(ReadBuffer[6]);
 
             Sites[siteId].Type = (StructureType)structureType;
-            Sites[siteId].Cooldown = param1;
+            Sites[siteId].Cooldown = cd;
             Sites[siteId].Owner = (Owner)owner;
+            Sites[siteId].Range = range;
         }
 
         // Read - Unit states
@@ -180,12 +322,18 @@ public class StateEngineWrapper
             Units[i].Type = (UnitType)unitType;
             Units[i].Location = new Point(x, y);
 
-            // Find pos of our queen
-            if (owner == 0 && unitType == (int)UnitType.Queen)
+            // Update queen position
+            if (unitType == (int)UnitType.Queen)
             {
-                QueenRef = Units[i];
+                if (Units[i].Owner == Owner.Enemy)
+                {
+                    EnemyQueenRef = Units[i];
+                }
+                else
+                {
+                    QueenRef = Units[i];
+                }
             }
-
             //int health = int.Parse(inputs[4]);
         }
 
@@ -196,8 +344,15 @@ public class StateEngineWrapper
         }
         else
         {
-            Debug("  Touching site " + touchedSiteId);
+            Debug("  Queen is touching site " + touchedSiteId);
             QueenTouchedSiteOrNull = Sites[touchedSiteId];
+        }
+
+        // Debug info
+        if (IsFirstTurn)
+        {
+            Debug("Our queen starts at " + QueenRef.Location);
+            Debug("Enemy queen starts at " + EnemyQueenRef.Location);
         }
     }
 }
@@ -209,7 +364,7 @@ public static class StaticConfig
     public const int KnightCost = 80;
 }
 
-public static class MapState
+public static class GameState
 {
     // Sites, index equals id, index 0 = id 0 etc
     public static Site[] Sites;
@@ -221,9 +376,11 @@ public static class MapState
 
     // Queen
     public static Unit QueenRef;
+    public static Unit EnemyQueenRef;
     public static Site QueenTouchedSiteOrNull = null;
 
     public static int GoldAvailable = 100;
+    public static bool IsFirstTurn = true;
 }
 
 public static class Log
@@ -237,29 +394,6 @@ public static class Log
     public static void Debug(string arg)
     {
         Console.Error.WriteLine(arg);
-    }
-}
-
-public static class Utility
-{
-    public static Site FindClosestUnclaimedSite()
-    {
-        double minDistance = double.MaxValue;
-        Site minSite = null;
-        foreach (var iter in Sites)
-        {
-            if (iter.Owner != Owner.None)
-                continue;
-
-            double distance = iter.Location.GetDistanceTo(QueenRef.Location);
-            if (distance < minDistance)
-            {
-                minDistance = distance;
-                minSite = iter;
-            }
-        }
-
-        return minSite;
     }
 }
 
@@ -289,20 +423,27 @@ public enum Owner
 public class Site
 {
     public int SiteId;
-    public int Radius;
+    public int CollisionRadius;
+    public int Range;
     public Point Location;
-    //public bool HasBeenTaken = false;
     public StructureType Type = StructureType.None;
     public Owner Owner = Owner.None;
 
     // -1 = cannot build, 0 = can build, positive integer = cooldown left
     public int Cooldown;
 
+    public double DistanceFromInitialStart = double.MinValue;
+
     public Site(int siteId, int radius, Point location)
     {
         SiteId = siteId;
-        Radius = radius;
+        CollisionRadius = radius;
         Location = location;
+    }
+
+    public override string ToString()
+    {
+        return $"[Site {SiteId} {Location}]";
     }
 }
 
