@@ -12,20 +12,135 @@ using System.Collections.Generic;
 
 using static GameState;
 using static StaticConfig;
-using static BehaviourConfig;
+using static BotBehaviour;
 using static Log;
 using System.Drawing;
+
+public enum UnitStrategy
+{
+    MakeKnights = 0,
+    MakeArchers = 1,
+    MakeGiants = 2
+}
 
 /// <summary>
 /// Handles unit logic
 /// </summary>
 public class UnitHandler
 {
+    public static UnitStrategy CurrentStrategy = UnitStrategy.MakeKnights;
+    private const int TowerSpamDetectionThreshold = 2;
+    private const int UnitSpamDetectionThreshold = 9;
+
+    public static void SetUnitStrategy()
+    {
+        // Is enemy spamming units?
+        int unitCount = GetUnitCount(Owner.Enemy, null);
+        if (unitCount > UnitSpamDetectionThreshold && GetUnitCount(Owner.Friendly, UnitType.Archer) < MaxArcherUnitCount)
+        {
+            CurrentStrategy = UnitStrategy.MakeArchers;
+            return;
+        }
+
+        // Is enemy spamming towers?
+        int towerCount = GetEnemyTowerCount();
+        if (towerCount > TowerSpamDetectionThreshold && GetUnitCount(Owner.Friendly, UnitType.Archer) < MaxGiantUnitCount)
+        {
+            CurrentStrategy = UnitStrategy.MakeGiants;
+            return;
+        }
+
+        // Otherwise pump knights
+        CurrentStrategy = UnitStrategy.MakeKnights;
+        return;
+    }
+
+    public static void ApplyUnitStrategyToQueen()
+    {
+        Debug("  Unit strat set to = " + Enum.GetName(typeof(UnitStrategy), CurrentStrategy));
+
+        BotBehaviour.MaxGiantRax = InitialMaxGiantRax;
+        BotBehaviour.MaxKnightsRax = InitialMaxKnightsRax;
+        BotBehaviour.MaxArcherRax = InitialMaxArcherRax;
+
+        // Order a rax to be built if unavailble
+        if (CurrentStrategy == UnitStrategy.MakeKnights)
+        {
+            BotBehaviour.MaxKnightsRax += 1;
+        }
+        else if (CurrentStrategy == UnitStrategy.MakeArchers)
+        {
+            BotBehaviour.MaxArcherRax += 1;
+        }
+        else if (CurrentStrategy == UnitStrategy.MakeGiants)
+        {
+            BotBehaviour.MaxGiantRax += 1;
+        }
+        else
+        {
+            Debug("WARNING - Unknown strategy set");
+            SanityCheckFailed();
+        }
+    }
+
+    private static int GetUnitCount(Owner? targetOwner, UnitType? type)
+    {
+        int count = 0;
+        foreach (var iter in Units)
+        {
+            if (targetOwner.HasValue && iter.Owner != targetOwner)
+                continue;
+            if (type.HasValue && iter.Type != type)
+                continue;
+
+            count++;
+        }
+        return count;
+    }
+
+    private static int GetEnemyTowerCount()
+    {
+        int count = 0;
+        foreach (var iter in Sites)
+        {
+            if (iter.Owner != Owner.Enemy)
+                continue;
+            if (iter.Type != StructureType.Tower)
+                continue;
+            count++;
+        }
+        return count;
+    }
+
     public static void DetermineTrainAction()
     {
-        Site siteToTrainAt = null;
+        // Determine unit type to train depending on current strategy
+        int targetRaxSubType = -1;
+        int unitCost = -1;
+        if (CurrentStrategy == UnitStrategy.MakeArchers)
+        {
+            targetRaxSubType = (int)UnitType.Archer;
+            unitCost = ArcherCost;
+        }
+        else if (CurrentStrategy == UnitStrategy.MakeKnights)
+        {
+            targetRaxSubType = (int)UnitType.Knight;
+            unitCost = KnightCost;
+        }
+        else if (CurrentStrategy == UnitStrategy.MakeGiants)
+        {
+            targetRaxSubType = (int)UnitType.Giant;
+            unitCost = GiantCost;
+        }
+        else
+        {
+            Debug("Unsupported unit type");
+            SanityCheckFailed();
+        }
 
-        if (GoldAvailable >= KnightCost)
+        // Find a site if possible
+        Site siteToTrainAt = null;
+        if (GoldAvailable >= unitCost)
         {
             for (int index = 0; index < SiteCount; index++)
             {
@@ -33,6 +148,7 @@ public class UnitHandler
 
                 if (siteIter.Type == StructureType.Barracks &&
                     siteIter.Owner == Owner.Friendly &&
+                    siteIter.RangeOrType == targetRaxSubType &&
                     siteIter.CooldownOrHealth == 0)
                 {
                     siteToTrainAt = siteIter;
@@ -51,6 +167,8 @@ public class UnitHandler
             GoldAvailable -= KnightCost;
         }
     }
+
+
 }
 
 /// <summary>
@@ -287,8 +405,8 @@ public static class QueenHandler
         }
         else
         {
-            Debug("Cant build building type");
-            Command("SANITYCHECKFAILED");
+            Debug("WARNING - Cant build building type");
+            SanityCheckFailed();
         }
     }
 
@@ -314,11 +432,11 @@ public static class QueenHandler
                 archerCount++;
         }
 
-        if (giantCount < StartingMaxGiantRax)
+        if (giantCount < MaxGiantRax)
             return UnitType.Giant;
-        if (knightCount < StartingMaxKnightsRax)
+        if (knightCount < MaxKnightsRax)
             return UnitType.Knight;
-        if (archerCount < StartingMaxArcherRax)
+        if (archerCount < MaxArcherRax)
             return UnitType.Archer;
 
         // We don't want a rax
@@ -492,6 +610,9 @@ public class MainLoop
             ReadTurnInputs();
 
             QueenHandler.DetermineQueenAction();
+
+            UnitHandler.SetUnitStrategy();
+            UnitHandler.ApplyUnitStrategyToQueen();
             UnitHandler.DetermineTrainAction();
 
             GoldAvailable += 10;
@@ -598,21 +719,29 @@ public class MainLoop
 public static class StaticConfig
 {
     public const int KnightCost = 80;
+    public const int ArcherCost = 100;
     public const int GiantCost = 140;
 }
 
 /// <summary>
 /// Bot behaviour settings
 /// </summary>
-public static class BehaviourConfig
+public static class BotBehaviour
 {
-    public const int StartingMaxGiantRax = 0;
-    public const int StartingMaxKnightsRax = 1;
-    public const int StartingMaxArcherRax = 1;
+    public const int MaxGiantUnitCount = 1;
+    public const int MaxArcherUnitCount = 4;
+    //public const int MaxKnightUnitCount = int.MaxValue;
 
+    public const int InitialMaxGiantRax = 0;
+    public const int InitialMaxKnightsRax = 1;
+    public const int InitialMaxArcherRax = 0;
+
+    public static int MaxGiantRax = InitialMaxGiantRax;
+    public static int MaxKnightsRax = InitialMaxKnightsRax;
+    public static int MaxArcherRax = InitialMaxArcherRax;
+
+    // Towers cannot be upgraded past this point
     public const int MaxTowerUpgrades = 7;
-
-
 }
 
 public static class GameState
@@ -645,6 +774,12 @@ public static class Log
     public static void Debug(string arg)
     {
         Console.Error.WriteLine(arg);
+    }
+
+    public static void SanityCheckFailed()
+    {
+        Debug("WARNING - Sanity check failed");
+        Command("SANITYCHECKFAILED");
     }
 }
 
