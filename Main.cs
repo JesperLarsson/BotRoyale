@@ -248,46 +248,47 @@ public static class QueenHandler
     {
         int touchedId = QueenTouchedSiteOrNull.SiteId;
 
+        // Determine type to build
+        UnitType raxType;
         if (QueenTouchedSiteOrNull.TargetType == StructureType.Tower)
         {
-            Command($"BUILD {touchedId} TOWER");
+            // Higher layer ordered a tower
+            raxType = UnitType.None;
         }
         else if (QueenTouchedSiteOrNull.TargetType == StructureType.Barracks)
         {
+            // Higher layer ordered a specific building
             Debug("COMMAND - Building target building");
-
-            var raxTypeRequested = QueenTouchedSiteOrNull.TargetRaxType;
-            if (raxTypeRequested == UnitType.Knight)
-            {
-                Command($"BUILD {touchedId} BARRACKS-KNIGHT");
-            }
-            else if (raxTypeRequested == UnitType.Giant)
-            {
-                Command($"BUILD {touchedId} BARRACKS-GIANT");
-            }
-            else
-            {
-                Command("SANITYCHECKFAILED");
-            }
+            raxType = QueenTouchedSiteOrNull.TargetRaxType;
         }
         else
         {
             // We just happend to touch something on the way somewhere
             Debug($"COMMAND - Happened to touch site " + QueenTouchedSiteOrNull + " on the way");
+            raxType = DetermineBarracksTypeOrNone();
+        }
 
-            var raxTypeRequested = DetermineBarracksTypeOrNone();
-            if (raxTypeRequested == UnitType.Knight)
-            {
-                Command($"BUILD {touchedId} BARRACKS-KNIGHT");
-            }
-            else if (raxTypeRequested == UnitType.Giant)
-            {
-                Command($"BUILD {touchedId} BARRACKS-GIANT");
-            }
-            else
-            {
-                Command($"BUILD {touchedId} TOWER");
-            }
+        // Send build command
+        if (raxType == UnitType.Knight)
+        {
+            Command($"BUILD {touchedId} BARRACKS-KNIGHT");
+        }
+        else if (raxType == UnitType.Giant)
+        {
+            Command($"BUILD {touchedId} BARRACKS-GIANT");
+        }
+        else if (raxType == UnitType.Archer)
+        {
+            Command($"BUILD {touchedId} BARRACKS-ARCHER");
+        }
+        else if (raxType == UnitType.None)
+        {
+            Command($"BUILD {touchedId} TOWER");
+        }
+        else
+        {
+            Debug("Cant build building type");
+            Command("SANITYCHECKFAILED");
         }
     }
 
@@ -296,6 +297,7 @@ public static class QueenHandler
         // Get number of current rax of each type
         int knightCount = 0;
         int giantCount = 0;
+        int archerCount = 0;
         foreach (var site in Sites)
         {
             if (site.Owner != Owner.Friendly)
@@ -308,12 +310,16 @@ public static class QueenHandler
                 knightCount++;
             if (raxType == UnitType.Giant)
                 giantCount++;
+            if (raxType == UnitType.Archer)
+                archerCount++;
         }
 
         if (giantCount < StartingMaxGiantRax)
             return UnitType.Giant;
         if (knightCount < StartingMaxKnightsRax)
             return UnitType.Knight;
+        if (archerCount < StartingMaxArcherRax)
+            return UnitType.Archer;
 
         // We don't want a rax
         return UnitType.None;
@@ -602,6 +608,8 @@ public static class BehaviourConfig
 {
     public const int StartingMaxGiantRax = 0;
     public const int StartingMaxKnightsRax = 1;
+    public const int StartingMaxArcherRax = 1;
+
     public const int MaxTowerUpgrades = 7;
 
 
