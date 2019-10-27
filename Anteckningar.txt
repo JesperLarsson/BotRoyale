@@ -1,18 +1,13 @@
 
-param2 = range kanske???
-
-
-Härnäst:
-- Bygg inte byggnader i all evighet
-- Testa att rusha mitten och bygg ett torn där, sen ta allt bakom tornet och bygg barracker
-  - Sen efter det kampa tornet
-  - Radien man börjar med är nog en bra indikator
-
 
 
 Förbättringar:
-- Bygg i barracken som är närmast fiende
+- Drottning borde inte gå in i range av deras torn
+- Drottningen kan fastna på saker om det råkar vara en site bara mitt i vägen till centrum eller så
 
+
+Små förbättringar:
+- Bygg i barracken som är närmast fiende
 
 
 Svåra förbättringar:
