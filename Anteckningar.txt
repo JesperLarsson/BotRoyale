@@ -12,9 +12,18 @@ Movement behöver kolla så att pathen inte intersectar med fiendens torn, annars 
 Om pathen man tar när man kitar är inom en move distance ifrån torner, gå till tornet istället så det uppgraderas
 
 
+"in danger" borde öka range på kite beroende på HP kvar
 
+Man kan kolla barrackers cooldown för att se vad fienden bygger!
+Räkna in det i beräkningen för att bygga enheter etc
 
+Kite:
+- Om inom en tick ifrån torn medan kitar vanligt, gå till tornet och uppgradera istället
+- Kolla på diffen mellan "kite long range" och short range, det är antalet vars DPS minskas om man kitar runt
+- Om den mängden är mindre en ett visst värde, fortsätt med normala strategin istället
+- Om short range är jättemånga, kör på fallback till origo istället
 
+Försök bygga torn i kluster runt center-tornet, så man har ett bra ställe att försvara på
 
 
 Förbättringar:
